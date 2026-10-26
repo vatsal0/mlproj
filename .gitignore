@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.DS_Store
+# training outputs and checkpoints live on scratch, not in git
+runs/
+logs/
+*.pt
