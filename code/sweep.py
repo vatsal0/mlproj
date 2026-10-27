@@ -39,15 +39,23 @@ def grid(name):
         for t, s in itertools.product(tasks, ["s", "m", "l"]):
             yield ["--task", t, "--T", "256", "--size", s, "--lr", "0.0001"]
     elif name == "lr_full":
-        for t, s, lr in itertools.product(tasks, list(LR), [3e-4, 1e-3, 3e-3]):
+        for t, s, lr in itertools.product(tasks, list(LR), [1e-4, 3e-4, 1e-3, 3e-3]):
+            if s == "xs" and lr == 1e-4:  # 1e-4 is only a candidate for the sizes where 3e-4 won at T = 256
+                continue
             yield ["--task", t, "--T", "512", "--size", s, "--lr", str(lr)]
+    elif name == "calibration":
+        # E0: are the tasks reachable at T = 2048 within 20k steps? (the T = 256 half is seed 0 of the mvp grid)
+        for t, s in itertools.product(tasks, ["s", "l"]):
+            yield ["--task", t, "--T", "2048", "--size", s, "--lr", str(LR[s])]
     elif name == "mvp":
         for t, T, s, seed in itertools.product(tasks, [128, 256, 512, 1024], ["xs", "s", "m", "l"], range(3)):
             yield ["--task", t, "--T", str(T), "--size", s, "--lr", str(LR[s]), "--seed", str(seed)]
     elif name == "main":
-        for t, T, s, seed in itertools.product(tasks, [256, 512, 1024, 2048], list(LR), range(5)):
+        # 3 initialization seeds x 3 data seeds, to separate which of the two decides when a run leaves the plateau
+        for t, T, s, seed, data_seed in itertools.product(tasks, [256, 512, 1024, 2048], list(LR), range(3), range(3)):
             extra = ["--save_at_acc", "0.3,0.6,0.9"] if s == "xl" else []  # distillation teachers
-            yield ["--task", t, "--T", str(T), "--size", s, "--lr", str(LR[s]), "--seed", str(seed)] + extra
+            yield ["--task", t, "--T", str(T), "--size", s, "--lr", str(LR[s]), "--seed", str(seed),
+                   "--data_seed", str(data_seed)] + extra
     elif name in ("heads", "head_dim", "depth"):
         shapes = dict(heads=HEADS, head_dim=HEAD_DIM, depth=DEPTH)[name]
         for t, T, shape, seed in itertools.product(tasks, [512, 2048], shapes, range(5)):

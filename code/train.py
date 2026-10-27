@@ -31,7 +31,8 @@ def get_args(argv=None):
     p.add_argument("--n_heads", type=int)
     p.add_argument("--head_dim", type=int)
     p.add_argument("--n_needles", type=int, default=N_NEEDLES)
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--seed", type=int, default=0)  # initialization
+    p.add_argument("--data_seed", type=int, default=None, help="order of training batches; defaults to --seed")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--batch", type=int, default=64)
     p.add_argument("--max_steps", type=int, default=20000)
@@ -62,7 +63,9 @@ def run_name(args, cfg):
     if args.name:
         return args.name
     shape = args.size or f"L{cfg.n_layer}-d{cfg.d_model}-h{cfg.n_heads}x{cfg.head_dim}"
-    return f"{args.task}_T{args.T}_{shape}_lr{args.lr:g}_s{args.seed}"
+    # the data seed appears in the name only when it differs, so names match runs from before --data_seed existed
+    data_suffix = f"_d{args.data_seed}" if args.data_seed not in (None, args.seed) else ""
+    return f"{args.task}_T{args.T}_{shape}_lr{args.lr:g}_s{args.seed}{data_suffix}"
 
 
 def setup_device():
@@ -123,7 +126,8 @@ def main(argv=None):
 
     g_eval = torch.Generator(dev).manual_seed(EVAL_SEED)
     eval_set = [make_batch(args.task, 64, args.T, g_eval, dev, args.n_needles) for _ in range(args.n_eval // 64)]
-    g_train = torch.Generator(dev).manual_seed(1000 + args.seed)
+    data_seed = args.seed if args.data_seed is None else args.data_seed
+    g_train = torch.Generator(dev).manual_seed(1000 + data_seed)
 
     decay = [p for p in model.parameters() if p.dim() >= 2]
     no_decay = [p for p in model.parameters() if p.dim() < 2]
