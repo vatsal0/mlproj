@@ -1,0 +1,32 @@
+30 finished runs
+task        T  size      lr  params  reached  med steps  med PFLOPs  final acc
+mqar      256     l   1e-04  25.31M    0/1          nan         nan      0.857
+mqar      256     l   3e-04  25.31M    1/1        16500      43.119      0.979
+mqar      256     l   1e-03  25.31M    0/1          nan         nan      0.050
+mqar      256     l   3e-03  25.31M    0/1          nan         nan      0.002
+mqar      256     m   1e-04  10.62M    1/1        18500      20.703      0.908
+mqar      256     m   3e-04  10.62M    1/1        11000      12.310      0.921
+mqar      256     m   1e-03  10.62M    0/1          nan         nan      0.059
+mqar      256     m   3e-03  10.62M    0/1          nan         nan      0.003
+mqar      256     s   1e-04   3.21M    0/1          nan         nan      0.080
+mqar      256     s   3e-04   3.21M    0/1          nan         nan      0.192
+mqar      256     s   1e-03   3.21M    0/1          nan         nan      0.067
+mqar      256     s   3e-03   3.21M    0/1          nan         nan      0.008
+mqar      256    xs   3e-04   0.40M    0/1          nan         nan      0.070
+mqar      256    xs   1e-03   0.40M    1/1         1500       0.077      0.989
+mqar      256    xs   3e-03   0.40M    0/1          nan         nan      0.066
+needle    256     l   1e-04  25.31M    1/1         8750      22.718      0.984
+needle    256     l   3e-04  25.31M    0/1          nan         nan      0.218
+needle    256     l   1e-03  25.31M    0/1          nan         nan      0.045
+needle    256     l   3e-03  25.31M    0/1          nan         nan      0.003
+needle    256     m   1e-04  10.62M    0/1          nan         nan      0.523
+needle    256     m   3e-04  10.62M    1/1        17000      18.808      0.973
+needle    256     m   1e-03  10.62M    0/1          nan         nan      0.113
+needle    256     m   3e-03  10.62M    0/1          nan         nan      0.003
+needle    256     s   1e-04   3.21M    0/1          nan         nan      0.213
+needle    256     s   3e-04   3.21M    0/1          nan         nan      0.212
+needle    256     s   1e-03   3.21M    0/1          nan         nan      0.199
+needle    256     s   3e-03   3.21M    0/1          nan         nan      0.008
+needle    256    xs   3e-04   0.40M    0/1          nan         nan      0.208
+needle    256    xs   1e-03   0.40M    0/1          nan         nan      0.202
+needle    256    xs   3e-03   0.40M    0/1          nan         nan      0.071

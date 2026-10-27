@@ -1,0 +1,81 @@
+# Checkpoint: MVP and Evaluation Pipeline
+
+Vatsal Baherwani, Ammar Ali, Abhishek Muhuri
+
+## Summary
+
+We have a working end-to-end system that generates our two synthetic tasks, trains transformers of five sizes, measures the compute each model needs to reach 90% accuracy, and tracks whether the model has learned the correct attention pattern. We ran our first experiments, a learning rate sweep and a scale sweep over four model sizes and four context lengths, on NYU's Torch cluster (126 runs). Learning is abrupt: runs sit at a copying plateau, and those that leave it reach 90% within a median of 2000 steps. Within our 20k-step budget, 21 of 24 runs reach 90% at context length 128, but only 12 of 72 runs do at longer contexts. Where models do reach 90%, the larger models need more FLOPs than the smallest one. The pilots also led us to redesign the needle-in-a-haystack task twice.
+
+## Core System
+
+We implement a Llama-style decoder-only transformer, which answers the question in our proposal feedback. Each layer applies RMSNorm before attention and before the MLP. Attention is causal softmax attention with rotary position embeddings, and the MLP is a SwiGLU layer with hidden size 8/3 times the model width. The model has no biases or dropout, and the input and output embeddings are untied. We set the attention width (number of heads times head dimension) separately from the model width, which our planned head dimension sweep needs.
+
+Our five model sizes scale depth and width together, from 0.4M to 59.5M non-embedding parameters (2 layers of width 128 up to 12 layers of width 640). We train with AdamW, a 250-step warmup followed by a constant learning rate, and a batch of 64 sequences. The constant learning rate means the time to reach 90% accuracy does not depend on how long we allow a run to train.
+
+## Data and Evaluation Pipeline
+
+Both tasks generate fresh random sequences at every step, so models cannot memorize training data. The tasks share one vocabulary of 256 filler tokens, 1024 keys, and 512 values. Every sequence ends with a block of queries, and the model must output the value paired with each queried key earlier in the context. In multi-query associative recall (MQAR), the context holds T/4 key-value pairs, so longer contexts contain more pairs to track. In needle-in-a-haystack, the context holds 16 key-value pairs at random positions in random filler, so longer contexts contain more filler while the retrieval problem stays fixed. At T = 64 the two tasks are identical, which makes the comparison between them clean.
+
+We evaluate every 250 steps on a fixed held-out set of 512 sequences. A run reaches the threshold at the first of three consecutive evaluations with at least 90% accuracy, so one noisy evaluation does not count. We convert steps to FLOPs with the analytic count of Kaplan et al. (2020), including the attention term that grows with context length. We also log accuracy by the position of the retrieved pair in the context, and the attention weight each head places on the correct value token. The second measure tells us when the model learns the retrieval pattern, since both tasks define exactly which token the model must attend to.
+
+## Baselines
+
+Random guessing scores 1/512. A stronger baseline copies a value from the context without matching keys. The query block shows each key with its value, so by the j-th of n queries the model has already seen j - 1 answers and can rule those values out. Copying uniformly among the n - j + 1 remaining values gives an average accuracy of H_n / n over the query block, where H_n is the n-th harmonic number. Values are drawn with replacement, so a sequence can repeat a value, which raises this slightly. We call the resulting accuracy, which we compute by simulation, the copying level. It is 21.3% on the needle task (n = 16) and 7.6%, 4.4%, and 2.6% on MQAR at T = 256, 512, and 1024 (n = T / 4). The copying level explains our plateaus: every run in the scale sweep whose accuracy never exceeds 50% sits at it (Preliminary Results). A model at the copying level, with little attention on the correct value, has learned to copy but not to retrieve. For our main question, the baseline is the smallest model trained from scratch, and we ask how much compute each larger model saves or costs relative to it.
+
+## First Experiments
+
+Our first experiment tunes the learning rate for each of the four smallest sizes at T = 256 on both tasks, with one seed. We swept 3e-4, 1e-3, and 3e-3 for every size. The lowest value, 3e-4, won for the three larger sizes, so we added 1e-4 for them (30 runs in total). For each size we pick the learning rate with the lowest median steps to 90%, counting a run that never reaches 90% as ten times the step budget, and break ties by mean final accuracy. Our second experiment is a reduced version of the main scale sweep: four sizes (0.4M to 25M parameters), context lengths 128, 256, 512, and 1024, both tasks, and 3 seeds (96 runs). Each run stops at the threshold or after 20k steps. Both experiments together used 27 allocated GPU hours on a mix of L40S, A100, and H200 GPUs, with four trainings sharing each GPU to keep utilization high. All runs log their configuration, source code, and metrics to Weights and Biases (project `long-context-scaling-mlproj`).
+
+## Preliminary Results
+
+Pilot runs on a laptop with the 3.2M model already show the abrupt learning that motivates our project. On MQAR at T = 64, accuracy sits near 20% until step 1500, then jumps and reaches 90% at step 4000 (Figure 1). Over the same steps, the attention weight of the best head on the correct value rises from 0.06 to 0.78. The jump in accuracy therefore coincides with the model learning the retrieval pattern, matching the account of Baherwani et al. (2026).
+
+[Figure 1: `figures/pilot_mqar_T64.png`. Caption: Held-out accuracy (left) and attention weight of the best head on the correct value (right) during training on MQAR at T = 64, for the 0.4M model (learning rate 3e-3) and the 3.2M model (learning rate 1e-3), one seed each. The dashed line marks the 90% threshold. The 3.2M model's accuracy jump coincides with its attention moving onto the correct value; the 0.4M model has learned neither within 3000 steps.]
+
+The pilots also exposed a problem with our original needle task, which we fixed in two steps. With a single key-value pair, the value is the only value token in the context, so the model can copy it without matching keys. With 4 pairs, the 3.2M model plateaued at 45% accuracy for 6000 steps at T = 64, with attention spread roughly evenly over the 4 values. The same model solved MQAR with 16 pairs by step 4000. We attribute the plateau to weak training signal, since the needle task scored only 4 answers per sequence against 16 for MQAR, and moved to 16 pairs. With 16 pairs at T = 128, the model sat at 20% accuracy from step 5000 to step 8000, with attention weight 0.04 on the correct value and flat accuracy across needle positions. The model has learned to copy but has not yet made the jump to retrieval within 8000 steps, which suggests long plateaus at longer contexts. Raising the learning rate to 3e-3 does not help: the same run reaches only 2.9% after 8000 steps, below the copying level. This sensitivity is why we tune the learning rate separately for each model size before comparing sizes.
+
+The learning rate sweep picks 1e-3 for the 0.4M model, 3e-4 for the 3.2M and 10.6M models, and 1e-4 for the 25M model. At 3e-3, the three larger sizes end below 1% accuracy, so larger models need smaller learning rates. These choices rest on one seed, and only 6 of the 30 runs reached 90%, so they are a coarse calibration. No learning rate reached 90% for the 3.2M model, so its choice rests on the tie-break by final accuracy. The choice for the 25M model is the least certain. At 1e-4 it reached 90% on needle and 86% on MQAR, while at 3e-4 it reached 90% on MQAR and stayed at the copying level on needle.
+
+In the scale sweep, most runs at long context do not reach 90% within 20k steps (Table 1). At T = 128, 21 of 24 runs reach 90%. At T = 256, 8 of 24 runs do, and at T = 512 and T = 1024, only 1 and 3 of 24 runs do. Longer plateaus at longer contexts match the finding of Baherwani et al. (2026). Every run whose accuracy never exceeds 50% sits at the copying level. On needle, the median final accuracy of these runs is 21.4% to 21.5% at every context length, against a copying level of 21.3%. On MQAR, the same median is 7.8%, 4.9%, and 3.0% at T = 256, 512, and 1024, against copying levels of 7.6%, 4.4%, and 2.6%. Nine more runs leave the plateau but do not reach 90% within 20k steps, ending between 57% and 94% accuracy. Lowering the threshold to 50% adds only 7 runs, for 40 of 96, because runs that leave the plateau reach 90% quickly.
+
+[Table 1. Seeds out of 3 that reach 90% within 20k steps, with the median steps to 90% over those seeds in parentheses.
+
+| Task | T | 0.4M | 3.2M | 10.6M | 25M |
+|---|---|---|---|---|---|
+| MQAR | 128 | 2 (15,375) | 3 (7000) | 2 (7750) | 3 (12,250) |
+| MQAR | 256 | 0 | 0 | 3 (11,500) | 1 (18,500) |
+| MQAR | 512 | 0 | 1 (18,750) | 0 | 0 |
+| MQAR | 1024 | 1 (17,250) | 0 | 0 | 0 |
+| Needle | 128 | 3 (14,500) | 3 (11,250) | 3 (7250) | 2 (17,125) |
+| Needle | 256 | 1 (8500) | 1 (19,000) | 1 (17,000) | 1 (8750) |
+| Needle | 512 | 0 | 0 | 0 | 0 |
+| Needle | 1024 | 1 (13,500) | 1 (7750) | 0 | 0 |
+]
+
+Where runs reach 90%, larger models need more FLOPs (Figure 2). At T = 128, the median steps to 90% on MQAR are 15,375, 7000, 7750, and 12,250 from the smallest model to the largest, and on needle they are 14,500, 11,250, 7250, and 17,125. The 3.2M and 10.6M models need about half the steps of the 0.4M model, but the 25M model needs about as many. A step of the 25M model costs 7 to 7.5 times as much as a step of the 3.2M model, and 44 to 56 times as much as a step of the 0.4M model, so these step savings never make up for the cost per step. FLOPs to 90% grow with model size at every context length where we can measure them. At T = 128, the 0.4M model reaches 90% with 0.37 PFLOPs on MQAR and 0.33 PFLOPs on needle, against 16 and 22 PFLOPs for the 25M model. The one setting where size helps is MQAR at T = 256. There, the 10.6M model reaches 90% in all three seeds by step 15,000, and the 25M model in one seed, The 0.4M model never leaves the copying level, and the 3.2M model leaves it in two seeds but does not reach 90%, finishing at 57% and 86%. MQAR at T = 256 holds 64 pairs, so either the smaller models lack the capacity to track them, or they need more than 20k steps. The full sweep's larger models and longer contexts will test which.
+
+[Figure 2: `figures/flops_to_threshold.png`. Caption: FLOPs to 90% accuracy against non-embedding parameters, one line per context length, for MQAR (left) and needle (right). Points are medians over the seeds that reach 90%, bars span the minimum and maximum, and a label such as 1/3 gives the number of seeds that reach 90%. Settings where no seed reaches 90% have no point. `figures/steps_to_threshold.png` shows the same data in steps.]
+
+The seed matters more than the model size at long context. On needle at T = 256, exactly one seed reaches 90% for each size, and it is seed 0 for all four sizes, at steps 8500, 19,000, 17,000, and 8750. The seed fixes both the initialization and the sequence of training batches, so we cannot yet tell which of the two decides whether a run jumps.
+
+The jump in accuracy usually coincides with learning the retrieval pattern, as in our pilot (Figure 3). In the 33 runs that reach 90%, accuracy rises from the copying level to 90% within a median of 2000 steps (range 250 to 10,250). Over those steps, the best head's attention on the correct value rises from a median of 0.05 to 0.58. In the 54 runs whose accuracy never exceeds 50%, it ends at a median of 0.008. Seven of the 33 successful runs break this pattern: they reach 90% while no head places more than 0.2 of its attention on the correct value. Five of the seven are the 2-layer 0.4M model, and one is the 25M model on needle at T = 256, which reaches 98% with attention of only 0.05 on the correct value. These models retrieve through a route that our probe does not measure, such as attending to a token next to the value.
+
+[Figure 3: `figures/curves_needle_T256.png`. Caption: Held-out accuracy (left) and attention weight of the best head on the correct value (right) on needle at T = 256, for all four sizes and three seeds. The dashed line marks the 90% threshold. Most runs plateau at the 21.3% copying level. Four runs, all with seed 0, jump to 90%. The 3.2M and 10.6M models' jumps coincide with their attention moving onto the correct value, while the 25M model's jump near step 8500 does not.]
+
+Accuracy does not depend on where the needle sits in the context (Figure 4). For every size and context length, final accuracy varies by at most 6.2 percentage points across the five position buckets, and the middle bucket is never more than 1 point below both ends. Small models trained on this task therefore do not show the lost-in-the-middle effect that Liu et al. (2023) find in large language models.
+
+[Figure 4: `figures/acc_by_depth.png`. Caption: Final needle accuracy by the relative position of the retrieved pair in the context, averaged over 3 seeds, for each model size and context length. Each average mixes seeds that reached 90% and seeds at the 21.3% copying level, so the level of each line reflects how many seeds succeeded, and its flatness shows that accuracy does not depend on position.]
+
+## Next Steps
+
+Our next step is the full scale sweep with five sizes up to 60M parameters, context lengths up to 2048, and 5 seeds. In parallel, we will run the architecture sweeps that vary head count, head dimension, and the trade-off between depth and width at a fixed parameter count. The full sweep saves checkpoints of the 60M model at 30%, 60%, and 90% accuracy, which become the teachers for our distillation experiments.
+
+The MVP shows that plateaus at T = 512 and above usually exceed our 20k-step budget, and that a lower accuracy threshold does not recover these runs, since runs that leave the plateau reach 90% quickly. [TODO, team decision: how the full sweep handles long plateaus. Options the MVP data supports: raise the step budget at long context, add seeds to settings where most seeds fail, separate the initialization seed from the data seed, and re-tune the learning rate at T = 512 with 1e-4 included. Replace this note with the chosen plan.]
+
+## References
+
+Baherwani, V., Chen, Z., Qiu, S., Wilson, A. G., and Izmailov, P. (2026). Emergent capabilities arise randomly from learning sparse attention patterns. arXiv:2606.25010.
+
+Kaplan, J., et al. (2020). Scaling laws for neural language models. arXiv:2001.08361.
+
+Liu, N. F., et al. (2023). Lost in the middle: How language models use long contexts. arXiv:2307.03172.

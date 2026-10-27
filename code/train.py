@@ -6,6 +6,7 @@ Example:
 import argparse
 import json
 import math
+import os
 import time
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from tasks import N_NEEDLES, VOCAB_SIZE, make_batch, num_queries
 
 N_DEPTH_BUCKETS = 5
 EVAL_SEED = 12345  # held-out set is identical across all runs
+TRAIN_LOG_EVERY = 50  # steps between wandb logs of train loss, grad norm, and learning rate
 
 
 def get_args(argv=None):
@@ -135,9 +137,18 @@ def main(argv=None):
     fwd = torch.compile(model) if args.compile else model
 
     print(f"{name}: {N / 1e6:.2f}M non-emb params, {flops_per_step:.3g} FLOPs/step on {dev} ({dtype})")
+    # wandb logging is on when WANDB_PROJECT is set (slurm/env.sh sets it), so laptop runs need no account
+    use_wandb = "WANDB_PROJECT" in os.environ
+    if use_wandb:
+        import wandb
+        wandb.init(name=name, group=Path(args.out).name, config=dict(
+            vars(args), params=N, n_layer=cfg.n_layer, d_model=cfg.d_model, n_heads=cfg.n_heads,
+            head_dim=cfg.head_dim, flops_per_step=flops_per_step, n_queries=nq))
+        wandb.run.log_code(Path(__file__).parent)
     log = open(out / "log.jsonl", "w")
     milestones = sorted(float(m) for m in args.save_at_acc.split(",") if m)
     streak, hit_step, t0 = 0, None, time.time()
+    time_last_train_log = t0
     for step in range(1, args.max_steps + 1):
         b = make_batch(args.task, args.batch, args.T, g_train, dev, args.n_needles)
         with torch.autocast(dev, dtype=dtype, enabled=dtype != torch.float32):
@@ -146,10 +157,18 @@ def main(argv=None):
         opt.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
         scaler.unscale_(opt)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        learning_rate = sched.get_last_lr()[0]
         scaler.step(opt)
         scaler.update()
         sched.step()
+        if use_wandb and step % TRAIN_LOG_EVERY == 0:
+            time_now = time.time()
+            wandb.log({"train/loss": loss.item(), "train/grad_norm": grad_norm.item(),
+                       "train/learning_rate": learning_rate,
+                       "train/seconds_per_step": (time_now - time_last_train_log) / TRAIN_LOG_EVERY,
+                       "train/flops": step * flops_per_step}, step=step)
+            time_last_train_log = time_now
 
         if step % args.eval_every and step != args.max_steps:
             continue
@@ -158,6 +177,11 @@ def main(argv=None):
         log.write(json.dumps(rec) + "\n")
         log.flush()
         print(f"  step {step:6d}  loss {loss.item():.3f}  acc {ev['acc']:.3f}  attn {ev['attn_mass_max']:.2f}")
+        if use_wandb:
+            eval_metrics = {"eval/accuracy": ev["acc"], "eval/attention_on_correct_value_best_head": ev["attn_mass_max"]}
+            for bucket, accuracy in enumerate(ev["acc_by_depth"]):
+                eval_metrics[f"eval/accuracy_by_depth_bucket_{bucket}"] = accuracy
+            wandb.log(eval_metrics, step=step)
         if not math.isfinite(loss.item()):
             break
         while milestones and ev["acc"] >= milestones[0]:
@@ -178,6 +202,9 @@ def main(argv=None):
     )
     torch.save(model.state_dict(), out / "final.pt")
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
+    if use_wandb:
+        wandb.summary.update(summary)
+        wandb.finish()
     return summary
 
 

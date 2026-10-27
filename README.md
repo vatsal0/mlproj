@@ -10,7 +10,7 @@ Vatsal runs experiments on NYU's Torch cluster. Ammar and Abhishek own analysis 
 
 - `proposal_draft.md`: the proposal we submitted, followed by the TA feedback and checkpoint instructions.
 - `experiment_plan.md`: every experiment we plan to run, the question each one answers, and its compute cost. Read this first.
-- `checkpoint_draft.md`: draft of the Oct 28 checkpoint. Sections marked `[TODO]` need results from the Torch runs.
+- `checkpoint/`: everything for the Oct 28 checkpoint: the write-up (`checkpoint.md`), its figures, and the results table.
 - `code/`: tasks, model, training, sweeps, analysis, and SLURM scripts (details below).
 - `figures/`: figures used in write-ups.
 - `style_sample.tex`: a writing sample for any write-up drafted with AI (see below).
@@ -34,7 +34,7 @@ Each run writes a folder with `summary.json` (final numbers, including steps and
 Run outputs live on Torch scratch. Vatsal copies them into `results/` without the model checkpoints and pushes:
 
 ```
-rsync -av --exclude '*.pt' --exclude 'stdout_*' torch:/scratch/vb2647/ml-project/runs/ results/
+rsync -av --exclude '*.pt' --exclude 'stdout_*' torch:/scratch/vb2647/mlproj/runs/ results/
 ```
 
 Analysis only needs numpy and matplotlib:
@@ -50,7 +50,7 @@ The figures:
 - `curves_<task>_T<length>.png`: accuracy and attention on the correct token over training, for every run. Look for whether the accuracy jump coincides with the attention jump.
 - `acc_by_depth.png`: final needle accuracy by where the needle sits in the context (the lost-in-the-middle check).
 
-Runs that never reach 90% are not failures of the pipeline. A plateau where accuracy sits above copying level (1/16 on needle, 4/T on MQAR) with flat attention means the model has learned to copy values but not to retrieve the right one. These cases are worth reporting.
+Runs that never reach 90% are not failures of the pipeline. A plateau at the copying level (21.3% on needle; 7.6%, 4.4%, 2.6% on MQAR at T = 256, 512, 1024; see the Baselines section of `checkpoint/checkpoint.md`) with flat attention means the model has learned to copy values but not to retrieve the right one. These cases are worth reporting.
 
 To run something small yourself, `python code/train.py --task mqar --T 64 --size s --max_steps 5000` reaches 90% in about 10 minutes on a laptop (needs PyTorch).
 

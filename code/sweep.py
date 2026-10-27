@@ -35,6 +35,9 @@ def grid(name):
     elif name == "lr":
         for t, s, lr in itertools.product(tasks, ["xs", "s", "m", "l"], [3e-4, 1e-3, 3e-3]):
             yield ["--task", t, "--T", "256", "--size", s, "--lr", str(lr)]
+        # 3e-4, the lowest rate above, won for s, m, and l, so we also try 1e-4 for those sizes
+        for t, s in itertools.product(tasks, ["s", "m", "l"]):
+            yield ["--task", t, "--T", "256", "--size", s, "--lr", "0.0001"]
     elif name == "lr_full":
         for t, s, lr in itertools.product(tasks, list(LR), [3e-4, 1e-3, 3e-3]):
             yield ["--task", t, "--T", "512", "--size", s, "--lr", str(lr)]

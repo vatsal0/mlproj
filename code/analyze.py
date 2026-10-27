@@ -88,6 +88,7 @@ def plot_cost(runs, metric, fig_dir):
     Ts = sorted({r["T"] for r in runs})
     fig, axes = plt.subplots(1, len(tasks), figsize=(5.5 * len(tasks), 4.2), squeeze=False)
     for ax, task in zip(axes[0], tasks):
+        label_positions = []  # (log10 x, log10 y) of seed-count labels already placed on this panel
         for i, T in enumerate(Ts):
             pts = []
             for (size,), rs in group([r for r in runs if r["task"] == task and r["T"] == T], ["size"]).items():
@@ -100,11 +101,19 @@ def plot_cost(runs, metric, fig_dir):
             ax.errorbar(p, med, yerr=[med - lo, hi - med], color=ramp(i, len(Ts)), marker=MARKERS[i % 4],
                         ms=7, lw=2, capsize=3, label=f"T = {T}")
             for x, y, kk, nn in zip(p, med, k, n):  # flag settings where some seeds failed
-                if kk < nn:
-                    ax.annotate(f"{kk}/{nn}", (x, y), textcoords="offset points", xytext=(6, 4), fontsize=9)
+                if kk < nn:  # shift a label up when another label already sits next to this point
+                    n_nearby = sum(abs(np.log10(x) - lx) < 0.15 and abs(np.log10(y) - ly) < 0.15
+                                   for lx, ly in label_positions)
+                    label_positions.append((np.log10(x), np.log10(y)))
+                    ax.annotate(f"{kk}/{nn}", (x, y), textcoords="offset points", xytext=(6, 4 + 11 * n_nearby),
+                                fontsize=9, color=ramp(i, len(Ts)))
         ax.set(xscale="log", yscale="log", title=task, xlabel="non-embedding parameters",
                ylabel=metric.replace("_", " "))
-    axes[0][-1].legend(title="context length")
+    # one legend for both panels, since a context length can have points in only one of them
+    handles_by_label = {label: handle for ax in axes[0] for handle, label in zip(*ax.get_legend_handles_labels())}
+    labels = sorted(handles_by_label, key=lambda label: int(label.split("= ")[1]))
+    axes[0][-1].legend([handles_by_label[label] for label in labels], labels, title="context length",
+                       loc="upper left", bbox_to_anchor=(1.02, 1))
     fig.tight_layout()
     fig.savefig(fig_dir / f"{metric}.pdf")
     fig.savefig(fig_dir / f"{metric}.png", dpi=150)

@@ -1,0 +1,34 @@
+96 finished runs
+task        T  size      lr  params  reached  med steps  med PFLOPs  final acc
+mqar     1024     l   1e-04  25.31M    1/3        19000     222.111      0.335
+mqar     1024     m   3e-04  10.62M    0/3          nan         nan      0.047
+mqar     1024     s   3e-04   3.21M    0/3          nan         nan      0.027
+mqar     1024    xs   1e-03   0.40M    1/3        17000       4.823      0.323
+mqar      128     l   1e-04  25.31M    3/3         6750       8.646      0.941
+mqar      128     m   3e-04  10.62M    2/3         6625       3.611      0.903
+mqar      128     s   3e-04   3.21M    3/3         6500       1.105      0.934
+mqar      128    xs   1e-03   0.40M    3/3        11750       0.284      0.951
+mqar      256     l   1e-04  25.31M    3/3        16000      41.812      0.895
+mqar      256     m   3e-04  10.62M    3/3        11500      12.869      0.955
+mqar      256     s   3e-04   3.21M    1/3         2000       0.706      0.505
+mqar      256    xs   1e-03   0.40M    0/3          nan         nan      0.075
+mqar      512     l   1e-04  25.31M    0/3          nan         nan      0.051
+mqar      512     m   3e-04  10.62M    0/3          nan         nan      0.049
+mqar      512     s   3e-04   3.21M    1/3        18250      13.823      0.353
+mqar      512    xs   1e-03   0.40M    0/3          nan         nan      0.038
+needle   1024     l   1e-04  25.31M    0/3          nan         nan      0.192
+needle   1024     m   3e-04  10.62M    0/3          nan         nan      0.214
+needle   1024     s   3e-04   3.21M    1/3         7250      12.171      0.466
+needle   1024    xs   1e-03   0.40M    2/3        11625       3.052      0.669
+needle    128     l   1e-04  25.31M    2/3        14875      18.969      0.703
+needle    128     m   3e-04  10.62M    3/3         4250       2.298      0.932
+needle    128     s   3e-04   3.21M    3/3         9750       1.630      0.965
+needle    128    xs   1e-03   0.40M    3/3         6500       0.148      0.932
+needle    256     l   1e-04  25.31M    1/3         8250      21.420      0.472
+needle    256     m   3e-04  10.62M    1/3        16250      17.979      0.468
+needle    256     s   3e-04   3.21M    1/3        17750       6.115      0.458
+needle    256    xs   1e-03   0.40M    1/3         8000       0.379      0.407
+needle    512     l   1e-04  25.31M    0/3          nan         nan      0.215
+needle    512     m   3e-04  10.62M    0/3          nan         nan      0.212
+needle    512     s   3e-04   3.21M    0/3          nan         nan      0.215
+needle    512    xs   1e-03   0.40M    1/3         8500       0.903      0.387
