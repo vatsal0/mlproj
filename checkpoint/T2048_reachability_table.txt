@@ -1,0 +1,6 @@
+4 finished runs
+task        T  size      lr  params  reached  med steps  med PFLOPs  final acc
+mqar     2048     l   1e-04  25.31M    0/1          nan         nan      0.018
+mqar     2048     s   3e-04   3.21M    0/1          nan         nan      0.019
+needle   2048     l   1e-04  25.31M    1/1        15500     410.810      0.931
+needle   2048     s   3e-04   3.21M    0/1          nan         nan      0.217

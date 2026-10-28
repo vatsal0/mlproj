@@ -1,0 +1,41 @@
+38 finished runs
+task        T  size      lr  params  reached  med steps  med PFLOPs  final acc
+mqar      512     l   1e-04  25.31M    0/1          nan         nan      0.052
+mqar      512     l   3e-04  25.31M    0/1          nan         nan      0.046
+mqar      512     l   1e-03  25.31M    0/1          nan         nan      0.006
+mqar      512     l   3e-03  25.31M    0/1          nan         nan      0.002
+mqar      512     m   1e-04  10.62M    0/1          nan         nan      0.049
+mqar      512     m   3e-04  10.62M    0/1          nan         nan      0.051
+mqar      512     m   1e-03  10.62M    0/1          nan         nan      0.023
+mqar      512     m   3e-03  10.62M    0/1          nan         nan      0.002
+mqar      512     s   1e-04   3.21M    0/1          nan         nan      0.050
+mqar      512     s   3e-04   3.21M    0/1          nan         nan      0.516
+mqar      512     s   1e-03   3.21M    0/1          nan         nan      0.004
+mqar      512     s   3e-03   3.21M    0/1          nan         nan      0.004
+mqar      512    xl   1e-04  59.49M    0/1          nan         nan      0.051
+mqar      512    xl   3e-04  59.49M    0/1          nan         nan      0.036
+mqar      512    xl   1e-03  59.49M    0/1          nan         nan      0.008
+mqar      512    xl   3e-03  59.49M    0/1          nan         nan      0.002
+mqar      512    xs   3e-04   0.40M    0/1          nan         nan      0.042
+mqar      512    xs   1e-03   0.40M    0/1          nan         nan      0.028
+mqar      512    xs   3e-03   0.40M    0/1          nan         nan      0.035
+needle    512     l   1e-04  25.31M    0/1          nan         nan      0.222
+needle    512     l   3e-04  25.31M    0/1          nan         nan      0.216
+needle    512     l   1e-03  25.31M    0/1          nan         nan      0.025
+needle    512     l   3e-03  25.31M    0/1          nan         nan      0.002
+needle    512     m   1e-04  10.62M    0/1          nan         nan      0.212
+needle    512     m   3e-04  10.62M    0/1          nan         nan      0.217
+needle    512     m   1e-03  10.62M    0/1          nan         nan      0.070
+needle    512     m   3e-03  10.62M    0/1          nan         nan      0.002
+needle    512     s   1e-04   3.21M    0/1          nan         nan      0.212
+needle    512     s   3e-04   3.21M    0/1          nan         nan      0.216
+needle    512     s   1e-03   3.21M    0/1          nan         nan      0.210
+needle    512     s   3e-03   3.21M    0/1          nan         nan      0.002
+needle    512    xl   1e-04  59.49M    0/1          nan         nan      0.218
+needle    512    xl   3e-04  59.49M    0/1          nan         nan      0.181
+needle    512    xl   1e-03  59.49M    0/1          nan         nan      0.002
+needle    512    xl   3e-03  59.49M    0/1          nan         nan      0.002
+needle    512    xs   3e-04   0.40M    0/1          nan         nan      0.200
+needle    512    xs   1e-03   0.40M    1/1         4000       0.425      0.954
+needle    512    xs   3e-03   0.40M    0/1          nan         nan      0.064
+best lr: {'l': 0.0001, 'm': 0.0003, 's': 0.0003, 'xl': 0.0001, 'xs': 0.001}
