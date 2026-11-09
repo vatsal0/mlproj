@@ -86,3 +86,22 @@ The MVP produces the checkpoint deliverables directly:
 **Sanity checks already done (MacBook, 3.2M model, lr 1e-3).** On MQAR at T = 64, accuracy plateaus near 20% until step 1500, then jumps and reaches 90% at step 4000. Over the same steps, the attention mass on the correct value rises from 0.06 to 0.78, so the jump in accuracy coincides with learning the retrieval pattern. On the 16-needle task at T = 128, accuracy sits at 20% from step 5000 to step 8000 with attention mass 0.04, so the model has not made the jump within 8000 steps. Accuracy is flat across needle positions during this plateau. With learning rate 3e-3 instead, the same run reaches only 2.9% after 8000 steps, below the 21% copying level, so a higher learning rate does not shorten the plateau.
 
 **Risk for the MVP.** Baherwani et al. (2026) find that the plateau before the jump grows with context length, so many MVP runs at T = 256 and 512 may hit the 10k step cap. `analyze.py --threshold 0.5` recomputes steps to threshold at a lower accuracy from the logs, which still gives a usable size comparison if 90% is out of reach.
+
+## Decisions after the checkpoint (Nov 8)
+
+The TA noted that FLOPs to threshold among successful seeds rewards luck: a size that succeeds in 1 of 3 seeds can look cheaper than one that succeeds in all 3. We now report, for every setting, the probability of reaching the threshold (with a 95% Wilson interval) and the expected FLOPs per success, which is all compute spent, failed runs included, divided by the number of successes. `analyze.py` writes both (`success_and_cost.png`), the fraction of runs that have reached the threshold against FLOPs spent (`reached_vs_flops.png`), and one row per run (`runs.csv`).
+
+Vatsal's experiments must finish by Nov 25, on 8 GPUs until the Nov 11 checkpoint and 4 GPUs after it. To fit, we cut the plan as follows, and the final report states each cut:
+- E2 uses 9 seeds per setting, each setting both the initialization and the data order. We dropped the 3 × 3 split of initialization and data seeds, because rerunning a seed on a different GPU type already changes when a run leaves the plateau, so the split would not isolate either factor, and the success probability only needs independent runs. Seeds 0 to 2 at T = 256 for sizes xs to l are the MVP runs.
+- E2 trains 50k steps at T = 512 and 1024, and 20k steps at T = 2048. Raising T = 2048 to 50k would cost about 320 more GPU hours.
+- E3 (heads, head dimension, depth versus width) runs at T = 256 only, with 5 seeds (120 runs; the 10.6M shape is shared by the three sweeps and runs once).
+- E5 (distillation) runs at T = 256 only, with xl teachers from E2, and only if time remains after E2 and E3.
+- Cut: E5b (attention matching), E6 (curriculum), and a test of whether deterministic kernels make runs reproducible.
+
+`train.py` now saves its full training state at every evaluation and resumes from it, and `slurm/submit_sweep_chain.sh` runs a grid as a chain of 8-hour jobs that continue each other's runs. E2 runs T = 256 and 512 on 4 L40S GPUs and T = 1024 and 2048 on 4 A100 GPUs, using the T = 512 learning rates (`runs/lr_full/best_lr_T512.json`: xs 1e-3, s 3e-4, m 3e-4, l 1e-4, xl 1e-4).
+
+| Experiment | Runs | Estimated GPU hours |
+|---|---|---|
+| E2 | 360 (24 reused) | 580 |
+| E3 at T = 256 | 120 | 18 |
+| E5 at T = 256 | 54 | 16 |

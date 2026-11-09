@@ -4,6 +4,7 @@ Split a grid across jobs with --shard i --n_shards n. Small models leave a GPU m
 --parallel k runs k trainings on the same GPU at once (Torch cancels jobs with low GPU utilization).
     python sweep.py --grid lr --out runs/lr --parallel 4
     python sweep.py --grid mvp --out runs/mvp --shard 0 --n_shards 8 --parallel 4
+    python sweep.py --grid main --T 256 512 --shard 0 --n_shards 4 --parallel 4   # only these context lengths
     python sweep.py --grid mvp --dry   # print commands only
 """
 import argparse
@@ -51,14 +52,20 @@ def grid(name):
         for t, T, s, seed in itertools.product(tasks, [128, 256, 512, 1024], ["xs", "s", "m", "l"], range(3)):
             yield ["--task", t, "--T", str(T), "--size", s, "--lr", str(LR[s]), "--seed", str(seed)]
     elif name == "main":
-        # 3 initialization seeds x 3 data seeds, to separate which of the two decides when a run leaves the plateau
-        for t, T, s, seed, data_seed in itertools.product(tasks, [256, 512, 1024, 2048], list(LR), range(3), range(3)):
+        # 9 seeds per setting, to estimate the probability of reaching the threshold. Shortest context first, so
+        # results arrive in order. Most runs at T = 512 and 1024 stay on the plateau for 20k steps, so they get 50k;
+        # T = 2048 keeps 20k to fit our compute budget. Seeds 0 to 2 at T = 256 repeat the mvp grid.
+        max_steps = {256: 20000, 512: 50000, 1024: 50000, 2048: 20000}
+        for T, t, s, seed in itertools.product([256, 512, 1024, 2048], tasks, list(LR), range(9)):
             extra = ["--save_at_acc", "0.3,0.6,0.9"] if s == "xl" else []  # distillation teachers
             yield ["--task", t, "--T", str(T), "--size", s, "--lr", str(LR[s]), "--seed", str(seed),
-                   "--data_seed", str(data_seed)] + extra
-    elif name in ("heads", "head_dim", "depth"):
-        shapes = dict(heads=HEADS, head_dim=HEAD_DIM, depth=DEPTH)[name]
-        for t, T, shape, seed in itertools.product(tasks, [512, 2048], shapes, range(5)):
+                   "--max_steps", str(max_steps[T])] + extra
+    elif name in ("heads", "head_dim", "depth", "architecture"):
+        if name == "architecture":  # all three sweeps; the "m" shape appears in each, so keep one copy
+            shapes = [dict(t) for t in dict.fromkeys(tuple(shape.items()) for shape in HEADS + HEAD_DIM + DEPTH)]
+        else:
+            shapes = dict(heads=HEADS, head_dim=HEAD_DIM, depth=DEPTH)[name]
+        for t, T, shape, seed in itertools.product(tasks, [256], shapes, range(5)):  # T = 256 only, to fit our budget
             yield ["--task", t, "--T", str(T), "--lr", str(LR["m"]), "--seed", str(seed)] + [
                 a for k, v in shape.items() for a in (f"--{k}", str(v))]
     else:
@@ -84,11 +91,13 @@ if __name__ == "__main__":
     p.add_argument("--parallel", type=int, default=1, help="concurrent runs on one GPU")
     p.add_argument("--lr_json", default=None, help="json mapping size -> lr, overrides LR")
     p.add_argument("--compile", action="store_true")
+    p.add_argument("--T", type=int, nargs="+", default=None, help="only run these context lengths")
     p.add_argument("--dry", action="store_true")
     a = p.parse_args()
     if a.lr_json:
         LR.update(json.load(open(a.lr_json)))
-    runs = [r for i, r in enumerate(grid(a.grid)) if i % a.n_shards == a.shard]
+    runs = [run_args for run_args in grid(a.grid) if a.T is None or int(run_args[run_args.index("--T") + 1]) in a.T]
+    runs = [r for i, r in enumerate(runs) if i % a.n_shards == a.shard]
     runs = [r + ["--out", a.out or f"runs/{a.grid}"] + (["--compile"] if a.compile else []) for r in runs]
     print(f"{len(runs)} runs in shard {a.shard}/{a.n_shards}, {a.parallel} at a time")
     with ThreadPoolExecutor(a.parallel) as ex:

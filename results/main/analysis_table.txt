@@ -1,0 +1,12 @@
+90 finished runs
+task        T           size      lr  params  reached  med steps  med PFLOPs  final acc  PFLOPs per success
+mqar      256              l   1e-04  25.31M    3/9        18500      48.345      0.756             150.481
+mqar      256              m   3e-04  10.62M    9/9        11500      12.869      0.962              13.056
+mqar      256              s   3e-04   3.21M    2/9         4875       1.721      0.420              26.427
+mqar      256             xl   1e-04  59.49M    4/9        16875     102.424      0.473             254.921
+mqar      256             xs   1e-03   0.40M    0/9          nan         nan      0.067              >9.288
+needle    256              l   1e-04  25.31M    3/9         8750      22.718      0.472             125.923
+needle    256              m   3e-04  10.62M    1/9        17000      18.808      0.299             195.829
+needle    256              s   3e-04   3.21M    5/9        13500       4.651      0.626              10.249
+needle    256             xl   1e-04  59.49M    5/9         8250      49.899      0.621             158.771
+needle    256             xs   1e-03   0.40M    4/9         8375       0.397      0.514               1.578

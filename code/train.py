@@ -116,6 +116,7 @@ def main(argv=None):
         print(f"skip {name} (done)")
         return json.loads((out / "summary.json").read_text())
     out.mkdir(parents=True, exist_ok=True)
+    resume_path = out / "resume.pt"  # training state saved at every evaluation, so a killed run continues
 
     dev, dtype = setup_device()
     torch.manual_seed(args.seed)
@@ -140,20 +141,49 @@ def main(argv=None):
     scaler = torch.amp.GradScaler(enabled=dtype == torch.float16)
     fwd = torch.compile(model) if args.compile else model
 
+    milestones = sorted(float(m) for m in args.save_at_acc.split(",") if m)
+    streak = 0  # consecutive evaluations at or above the threshold
+    first_above = None  # step of the first evaluation in the current streak
+    hit_step = None
+    start_step = 0
+    n_log_lines = 0  # evaluations written to log.jsonl
+    wall_time_before_resume = 0.0
+    wandb_run_id = None
+    if resume_path.exists():
+        state = torch.load(resume_path, map_location=dev, weights_only=False)
+        model.load_state_dict(state["model"])
+        opt.load_state_dict(state["optimizer"])
+        sched.load_state_dict(state["scheduler"])
+        scaler.load_state_dict(state["scaler"])
+        g_train.set_state(state["train_generator"].cpu())
+        start_step = state["step"]
+        streak = state["streak"]
+        first_above = state["first_above"]
+        hit_step = state["hit_step"]
+        milestones = state["milestones"]
+        n_log_lines = state["n_log_lines"]
+        wall_time_before_resume = state["wall_time"]
+        wandb_run_id = state["wandb_run_id"]
+        # drop log lines written after the saved state (possibly a half-written one), which this run will repeat
+        log_lines = (out / "log.jsonl").read_text().splitlines()[:n_log_lines]
+        (out / "log.tmp").write_text("".join(line + "\n" for line in log_lines))
+        os.replace(out / "log.tmp", out / "log.jsonl")
+        print(f"resuming {name} from step {start_step}")
+
     print(f"{name}: {N / 1e6:.2f}M non-emb params, {flops_per_step:.3g} FLOPs/step on {dev} ({dtype})")
     # wandb logging is on when WANDB_PROJECT is set (slurm/env.sh sets it), so laptop runs need no account
     use_wandb = "WANDB_PROJECT" in os.environ
     if use_wandb:
         import wandb
-        wandb.init(name=name, group=Path(args.out).name, config=dict(
+        wandb.init(name=name, group=Path(args.out).name, id=wandb_run_id, resume="allow", config=dict(
             vars(args), params=N, n_layer=cfg.n_layer, d_model=cfg.d_model, n_heads=cfg.n_heads,
             head_dim=cfg.head_dim, flops_per_step=flops_per_step, n_queries=nq))
+        wandb_run_id = wandb.run.id
         wandb.run.log_code(Path(__file__).parent)
-    log = open(out / "log.jsonl", "w")
-    milestones = sorted(float(m) for m in args.save_at_acc.split(",") if m)
-    streak, hit_step, t0 = 0, None, time.time()
-    time_last_train_log = t0
-    for step in range(1, args.max_steps + 1):
+    log = open(out / "log.jsonl", "a")
+    t0 = time.time() - wall_time_before_resume
+    time_last_train_log = time.time()
+    for step in range(start_step + 1, args.max_steps + 1):
         b = make_batch(args.task, args.batch, args.T, g_train, dev, args.n_needles)
         with torch.autocast(dev, dtype=dtype, enabled=dtype != torch.float32):
             logits, _ = fwd(b["x"], b["qpos"])
@@ -180,6 +210,7 @@ def main(argv=None):
         rec = dict(step=step, flops=step * flops_per_step, loss=loss.item(), time=time.time() - t0, **ev)
         log.write(json.dumps(rec) + "\n")
         log.flush()
+        n_log_lines += 1
         print(f"  step {step:6d}  loss {loss.item():.3f}  acc {ev['acc']:.3f}  attn {ev['attn_mass_max']:.2f}")
         if use_wandb:
             eval_metrics = {"eval/accuracy": ev["acc"], "eval/attention_on_correct_value_best_head": ev["attn_mass_max"]}
@@ -197,6 +228,14 @@ def main(argv=None):
             hit_step = first_above
             if not args.no_early_stop:
                 break
+        # no save after the last step: a run resumed there would have no steps left and no summary to write
+        if step < args.max_steps:
+            state = dict(model=model.state_dict(), optimizer=opt.state_dict(), scheduler=sched.state_dict(),
+                         scaler=scaler.state_dict(), train_generator=g_train.get_state(), step=step, streak=streak,
+                         first_above=first_above, hit_step=hit_step, milestones=milestones, n_log_lines=n_log_lines,
+                         wall_time=time.time() - t0, wandb_run_id=wandb_run_id)
+            torch.save(state, out / "resume.tmp")
+            os.replace(out / "resume.tmp", resume_path)  # atomic, so a kill mid-save keeps the previous state
 
     summary = dict(
         vars(args), name=name, params=N, n_layer=cfg.n_layer, d_model=cfg.d_model, n_heads=cfg.n_heads,
@@ -206,6 +245,7 @@ def main(argv=None):
     )
     torch.save(model.state_dict(), out / "final.pt")
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
+    resume_path.unlink(missing_ok=True)
     if use_wandb:
         wandb.summary.update(summary)
         wandb.finish()
