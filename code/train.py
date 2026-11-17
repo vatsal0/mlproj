@@ -45,6 +45,10 @@ def get_args(argv=None):
     p.add_argument("--no_early_stop", action="store_true")
     p.add_argument("--save_at_acc", default="", help="e.g. 0.3,0.6,0.9: checkpoint when accuracy first "
                    "crosses each value (teachers from before, during, and after learning)")
+    p.add_argument("--teacher", default=None, help="checkpoint from a --save_at_acc run (next to its summary.json); "
+                   "the student then trains on a mix of cross-entropy and KL divergence to the teacher's predictions")
+    p.add_argument("--distill_weight", type=float, default=0.5, help="weight of the KL term; cross-entropy gets 1 - this")
+    p.add_argument("--distill_temperature", type=float, default=1.0)
     p.add_argument("--compile", action="store_true")
     p.add_argument("--out", default="runs")
     p.add_argument("--name", default=None)
@@ -65,7 +69,34 @@ def run_name(args, cfg):
     shape = args.size or f"L{cfg.n_layer}-d{cfg.d_model}-h{cfg.n_heads}x{cfg.head_dim}"
     # the data seed appears in the name only when it differs, so names match runs from before --data_seed existed
     data_suffix = f"_d{args.data_seed}" if args.data_seed not in (None, args.seed) else ""
-    return f"{args.task}_T{args.T}_{shape}_lr{args.lr:g}_s{args.seed}{data_suffix}"
+    # e.g. "_teacher_xl_s1_acc0.3_weight0.5_temperature1": the teacher's size and seed, the accuracy its checkpoint
+    # was saved at, and the distillation settings
+    teacher_suffix = ""
+    if args.teacher:
+        teacher_summary = json.loads((Path(args.teacher).parent / "summary.json").read_text())
+        teacher_accuracy = Path(args.teacher).stem.split("_")[1]  # "ckpt_acc0.3_step13250" -> "acc0.3"
+        teacher_suffix = (f"_teacher_{teacher_summary['size']}_s{teacher_summary['seed']}_{teacher_accuracy}"
+                          f"_weight{args.distill_weight:g}_temperature{args.distill_temperature:g}")
+    return f"{args.task}_T{args.T}_{shape}_lr{args.lr:g}_s{args.seed}{data_suffix}{teacher_suffix}"
+
+
+def load_teacher(path, args, n_queries, eval_set, dev, dtype):
+    """The frozen teacher model, and a dict with its held-out accuracy, the compute spent training it up to this
+    checkpoint, and the compute of its forward pass on one training batch of the student."""
+    teacher_summary = json.loads((Path(path).parent / "summary.json").read_text())
+    shape = {k: teacher_summary[k] for k in ("n_layer", "d_model", "n_heads", "head_dim")}
+    teacher = Transformer(ModelConfig(vocab_size=VOCAB_SIZE, max_len=teacher_summary["T"], **shape)).to(dev)
+    teacher.load_state_dict(torch.load(path, map_location=dev))
+    teacher.requires_grad_(False)
+    teacher_accuracy = evaluate(teacher, eval_set, dev, dtype)["acc"]
+    teacher.eval()  # evaluate() leaves the model in training mode
+    teacher_step = int(Path(path).stem.split("_step")[1])  # "ckpt_acc0.3_step13250" -> 13250
+    # a training step costs a forward and a backward pass, about 3 forward passes (Kaplan et al., 2020)
+    teacher_train_flops_per_seq = train_flops_per_seq(teacher.cfg, args.T, n_queries, n_params(teacher))
+    teacher_info = dict(teacher_accuracy=teacher_accuracy,
+                        teacher_training_flops=teacher_step * teacher_summary["flops_per_step"],
+                        teacher_forward_flops_per_step=args.batch * teacher_train_flops_per_seq / 3)
+    return teacher, teacher_info
 
 
 def setup_device():
@@ -127,6 +158,11 @@ def main(argv=None):
 
     g_eval = torch.Generator(dev).manual_seed(EVAL_SEED)
     eval_set = [make_batch(args.task, 64, args.T, g_eval, dev, args.n_needles) for _ in range(args.n_eval // 64)]
+    teacher = None
+    teacher_info = {}  # goes into the wandb config and summary
+    if args.teacher:
+        teacher, teacher_info = load_teacher(args.teacher, args, nq, eval_set, dev, dtype)
+        print(f"teacher {args.teacher}: held-out accuracy {teacher_info['teacher_accuracy']:.3f}")
     data_seed = args.seed if args.data_seed is None else args.data_seed
     g_train = torch.Generator(dev).manual_seed(1000 + data_seed)
 
@@ -177,7 +213,7 @@ def main(argv=None):
         import wandb
         wandb.init(name=name, group=Path(args.out).name, id=wandb_run_id, resume="allow", config=dict(
             vars(args), params=N, n_layer=cfg.n_layer, d_model=cfg.d_model, n_heads=cfg.n_heads,
-            head_dim=cfg.head_dim, flops_per_step=flops_per_step, n_queries=nq))
+            head_dim=cfg.head_dim, flops_per_step=flops_per_step, n_queries=nq, **teacher_info))
         wandb_run_id = wandb.run.id
         wandb.run.log_code(Path(__file__).parent)
     log = open(out / "log.jsonl", "a")
@@ -187,7 +223,18 @@ def main(argv=None):
         b = make_batch(args.task, args.batch, args.T, g_train, dev, args.n_needles)
         with torch.autocast(dev, dtype=dtype, enabled=dtype != torch.float32):
             logits, _ = fwd(b["x"], b["qpos"])
-            loss = F.cross_entropy(logits.float().flatten(0, 1), b["ans"].flatten())
+            cross_entropy = F.cross_entropy(logits.float().flatten(0, 1), b["ans"].flatten())
+            loss = cross_entropy
+            if teacher is not None:
+                with torch.no_grad():
+                    teacher_logits, _ = teacher(b["x"], b["qpos"])
+                temperature = args.distill_temperature
+                # KL(teacher || student) per answer, scaled by temperature^2 so its gradient size does not depend on
+                # the temperature (Hinton et al., 2015)
+                kl_to_teacher = F.kl_div(F.log_softmax(logits.float().flatten(0, 1) / temperature, -1),
+                                         F.log_softmax(teacher_logits.float().flatten(0, 1) / temperature, -1),
+                                         log_target=True, reduction="batchmean") * temperature**2
+                loss = (1 - args.distill_weight) * cross_entropy + args.distill_weight * kl_to_teacher
         opt.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
         scaler.unscale_(opt)
@@ -198,16 +245,20 @@ def main(argv=None):
         sched.step()
         if use_wandb and step % TRAIN_LOG_EVERY == 0:
             time_now = time.time()
-            wandb.log({"train/loss": loss.item(), "train/grad_norm": grad_norm.item(),
-                       "train/learning_rate": learning_rate,
-                       "train/seconds_per_step": (time_now - time_last_train_log) / TRAIN_LOG_EVERY,
-                       "train/flops": step * flops_per_step}, step=step)
+            train_metrics = {"train/loss": loss.item(), "train/cross_entropy": cross_entropy.item(),
+                             "train/grad_norm": grad_norm.item(), "train/learning_rate": learning_rate,
+                             "train/seconds_per_step": (time_now - time_last_train_log) / TRAIN_LOG_EVERY,
+                             "train/flops": step * flops_per_step}
+            if teacher is not None:
+                train_metrics["train/kl_to_teacher"] = kl_to_teacher.item()
+            wandb.log(train_metrics, step=step)
             time_last_train_log = time_now
 
         if step % args.eval_every and step != args.max_steps:
             continue
         ev = evaluate(model, eval_set, dev, dtype)
-        rec = dict(step=step, flops=step * flops_per_step, loss=loss.item(), time=time.time() - t0, **ev)
+        rec = dict(step=step, flops=step * flops_per_step, loss=loss.item(), cross_entropy=cross_entropy.item(),
+                   time=time.time() - t0, **ev)
         log.write(json.dumps(rec) + "\n")
         log.flush()
         n_log_lines += 1
@@ -241,7 +292,7 @@ def main(argv=None):
         vars(args), name=name, params=N, n_layer=cfg.n_layer, d_model=cfg.d_model, n_heads=cfg.n_heads,
         head_dim=cfg.head_dim, flops_per_step=flops_per_step, reached=hit_step is not None,
         steps_to_threshold=hit_step, flops_to_threshold=hit_step * flops_per_step if hit_step else None,
-        final_acc=ev["acc"], last_step=step, wall_time=time.time() - t0,
+        final_acc=ev["acc"], last_step=step, wall_time=time.time() - t0, **teacher_info,
     )
     torch.save(model.state_dict(), out / "final.pt")
     (out / "summary.json").write_text(json.dumps(summary, indent=1))

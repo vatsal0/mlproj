@@ -1,0 +1,27 @@
+54 finished runs
+
+task     size          teacher  reached  student only  + teacher forward  + teacher training  break-even students   (PFLOPs per success)
+mqar       xs     from scratch    0/9           >9.29              >9.29               >9.29                     
+mqar       xs   teacher at 30%    1/3            2.30              92.33              172.75              unknown
+mqar       xs   teacher at 60%    1/3            2.15              86.62              170.08              unknown
+mqar       xs   teacher at 90%    0/3           >3.10            >124.49             >221.60              unknown
+mqar        s     from scratch    2/9           26.43              26.43               26.43                     
+mqar        s   teacher at 30%    3/3            5.38              36.24              116.66                never
+mqar        s   teacher at 60%    3/3            4.21              28.32              111.77                never
+mqar        s   teacher at 90%    0/3          >21.18            >142.57             >239.68              unknown
+mqar        m     from scratch    9/9           13.06              13.06               13.06                     
+mqar        m   teacher at 30%    3/3           12.68              35.61              116.03                never
+mqar        m   teacher at 60%    3/3           15.48              43.47              126.92                never
+mqar        m   teacher at 90%    1/3           61.83             173.61              270.72                never
+needle     xs     from scratch    4/9            1.58               1.58                1.58                     
+needle     xs   teacher at 30%    1/3            2.40             104.72              145.55                never
+needle     xs   teacher at 60%    0/3           >2.84            >123.81             >166.15              unknown
+needle     xs   teacher at 90%    1/3            2.38             103.69              153.59                never
+needle      s     from scratch    5/9           10.25              10.25               10.25                     
+needle      s   teacher at 30%    0/3          >20.67            >141.64             >182.46              unknown
+needle      s   teacher at 60%    0/3          >20.67            >141.64             >183.98              unknown
+needle      s   teacher at 90%    1/3           19.29             132.20              182.09                never
+needle      m     from scratch    1/9          195.83             195.83              195.83                     
+needle      m   teacher at 30%    2/3           27.24              76.89              117.72                    1
+needle      m   teacher at 60%    2/3           25.31              71.43              113.77                    1
+needle      m   teacher at 90%    1/3           59.47             167.84              217.73                    2

@@ -68,6 +68,17 @@ def grid(name):
         for t, T, shape, seed in itertools.product(tasks, [256], shapes, range(5)):  # T = 256 only, to fit our budget
             yield ["--task", t, "--T", str(T), "--lr", str(LR["m"]), "--seed", str(seed)] + [
                 a for k, v in shape.items() for a in (f"--{k}", str(v))]
+    elif name == "distillation":
+        # E5: students trained by distillation from 59.5M (xl) teachers of the main grid at T = 256, saved when the
+        # teacher first reached 30%, 60%, and 90% accuracy. Each task uses the lowest teacher seed that saved all
+        # three checkpoints. The from-scratch baseline is the main grid at T = 256 (same sizes, rates, and seeds), so
+        # pass the main grid's --lr_json.
+        teacher_runs = Path(__file__).resolve().parent.parent / "runs" / "main"
+        teacher_seed = {"mqar": 1, "needle": 3}
+        for t, accuracy, s, seed in itertools.product(tasks, ["0.3", "0.6", "0.9"], ["xs", "s", "m"], range(3)):
+            [teacher] = teacher_runs.glob(f"{t}_T256_xl_*_s{teacher_seed[t]}/ckpt_acc{accuracy}_*.pt")
+            yield ["--task", t, "--T", "256", "--size", s, "--lr", str(LR[s]), "--seed", str(seed),
+                   "--teacher", str(teacher)]
     else:
         raise ValueError(name)
 

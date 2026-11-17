@@ -1,11 +1,20 @@
-# Summary (Nov 9)
+# Summary (Nov 16)
 
-- **Main sweep:** T = 256 is done (90 runs, 9 seeds). T = 512 and 1024 are running; T = 2048 has not started.
-- **Model size:** success does not rise with model size at T = 256. The 10.6M model reaches 90% in 9 of 9 seeds on MQAR but only 1 of 9 on needle.
-- **Cost per success:** the cheapest model is the smallest one that succeeds reliably:
+- **Main sweep:** all 360 runs are done (5 sizes, 2 tasks, T = 256 to 2048, 9 seeds each). Distillation (54 runs) is done.
+- **Context length:** within an equal budget of 20k steps, 36 of 90 runs reach 90% at T = 256, 12 at T = 512, 7 at T = 1024, and 0 at T = 2048.
+- **Best size depends on the task as context grows:**
+  - needle: the smallest model (0.4M) is the cheapest and most reliable (7 of 9 at T = 1024, 11.6 PFLOPs per success). The 59.5M model drops to 0 of 9 at T = 512.
+  - MQAR: only large models succeed at longer context. At T = 512, 25M and 59.5M succeed in 9 of 9 within 50k steps; at T = 1024, only 59.5M succeeds in more than 1 of 9 (4 of 9).
+- **Cost per success** from T = 256 to 1024 rises 7× on needle and 57× on MQAR, for the cheapest successful size.
+- **Model size at T = 256:** success does not rise with model size. The 10.6M model reaches 90% in 9 of 9 seeds on MQAR but only 1 of 9 on needle.
+- **Cost per success at T = 256:** the cheapest model is the smallest one that succeeds reliably:
   - needle: 0.4M, at 1.6 PFLOPs per success;
   - MQAR: 10.6M, at 13 PFLOPs, because 0.4M never succeeds.
-- **Larger models:** 25M and 59.5M cost 12 to 100 times more per success than the cheapest size.
+- **Larger models at T = 256:** 25M and 59.5M cost 12 to 100 times more per success than the cheapest size.
 - **Depth at about 10M parameters:** shallow and wide wins clearly. 2 layers reach 90% in 5 of 5 seeds on both tasks, while 12 and 24 layers reach it in 0 of 5. The learning rate was not re-tuned per shape.
 - **Head dimension:** at 16, no run succeeds. The number of heads at a fixed width has no clear effect with 5 seeds.
-- **Most failures:** runs that never leave the copying level. The few runs between 50% and 90% are mostly still climbing at the 20k-step cap.
+- **Most failures,** at every context length, never leave the copying level (never pass 50%). The few runs between 50% and 90% are mostly still climbing at their step cap.
+- **Distillation from the 59.5M teacher at T = 256:**
+  - Partly trained teachers (30% and 60%) cut the student's own compute per success on MQAR (3.2M: 26 to about 5 PFLOPs, 2/9 to 3/3) and on needle at 10.6M. On MQAR, the 90% teacher helps least.
+  - Once the teacher's forward passes are counted, distillation costs more than training from scratch everywhere except needle at 10.6M, where it pays off even with the teacher's training included (about 115 vs 196 PFLOPs per success).
+  - 3 seeds per setting, so these are rough.

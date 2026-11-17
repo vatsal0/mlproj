@@ -2,6 +2,7 @@
 
     python analyze.py runs/mvp                 # summary table + figures in runs/mvp/figures
     python analyze.py runs/lr --best_lr lr.json  # pick the best lr per size, for sweep.py --lr_json
+    python analyze.py runs/distillation --baseline runs/main  # distilled students against training from scratch
 
 Runs that never reach the threshold still cost compute, so besides the cost of the runs that succeed we report
 the success probability and the expected compute per success: all compute spent, failures included, divided
@@ -59,6 +60,11 @@ def load(root, threshold=None):
         s["size"] = s["size"] or f"L{s['n_layer']}-d{s['d_model']}-h{s['n_heads']}x{s['head_dim']}"
         # a successful run's cost is its compute up to the threshold; a failed run's is everything it trained
         s["flops_spent"] = s["flops_to_threshold"] if s["reached"] else s["last_step"] * s["flops_per_step"]
+        if s.get("teacher"):  # a distilled student also ran the teacher forward at every step it trained
+            steps_trained = s["steps_to_threshold"] if s["reached"] else s["last_step"]
+            s["teacher_forward_flops_spent"] = steps_trained * s["teacher_forward_flops_per_step"]
+            # the accuracy at which the teacher checkpoint was saved, from its name: "ckpt_acc0.3_step13250" -> 0.3
+            s["teacher_saved_at_accuracy"] = float(Path(s["teacher"]).stem.split("_")[1].removeprefix("acc"))
         runs.append(s)
     return runs
 
@@ -103,13 +109,16 @@ def write_run_table(runs, path):
     summary_columns = ["name", "task", "T", "size", "params", "n_layer", "d_model", "n_heads", "head_dim", "lr",
                        "seed", "max_steps", "reached", "steps_to_threshold", "flops_to_threshold", "last_step",
                        "flops_spent", "final_acc"]
+    teacher_columns = (["teacher_saved_at_accuracy", "teacher_accuracy", "teacher_training_flops",
+                        "teacher_forward_flops_spent"] if any(run.get("teacher") for run in runs) else [])
     log_columns = ["max_acc", "first_step_above_half_accuracy", "final_attention_on_correct_value"]
     with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, summary_columns + log_columns)
+        writer = csv.DictWriter(f, summary_columns + teacher_columns + log_columns)
         writer.writeheader()
         for run in sorted(runs, key=lambda run: run["name"]):
             steps_above_half = [record["step"] for record in run["log"] if record["acc"] >= 0.5]
             writer.writerow({**{column: run[column] for column in summary_columns},
+                             **{column: run.get(column) for column in teacher_columns},
                              "max_acc": max(record["acc"] for record in run["log"]),
                              "first_step_above_half_accuracy": steps_above_half[0] if steps_above_half else None,
                              "final_attention_on_correct_value": run["log"][-1]["attn_mass_max"]})
@@ -281,6 +290,106 @@ def plot_architecture(runs, fig_dir, threshold):
     plt.close(fig)
 
 
+def distillation_costs(seed_runs):
+    """Expected FLOPs per successful student, counted three ways: student training only; plus the teacher's
+    forward passes during distillation; plus training the teacher up to its checkpoint, charged in full to one
+    student. For students trained from scratch, all three are the same."""
+    n_successes = max(sum(r["reached"] for r in seed_runs), 1)
+    student_only = expected_flops_per_success(seed_runs)
+    with_teacher_forward = student_only + sum(r.get("teacher_forward_flops_spent", 0) for r in seed_runs) / n_successes
+    with_teacher_training = with_teacher_forward + seed_runs[0].get("teacher_training_flops", 0)
+    return student_only, with_teacher_forward, with_teacher_training
+
+
+def distillation_settings(distilled_runs, baseline_runs):
+    """Returns the labels, training from scratch first and then each teacher checkpoint in order of the accuracy
+    it was saved at, and {(task, size, label): seed runs}."""
+    accuracies = sorted({r["teacher_saved_at_accuracy"] for r in distilled_runs})
+    labels = ["from scratch"] + [f"teacher at {accuracy:.0%}" for accuracy in accuracies]
+    settings = {(task, size, "from scratch"): seed_runs
+                for (task, size), seed_runs in group(baseline_runs, ["task", "size"]).items()}
+    for (task, size, accuracy), seed_runs in group(distilled_runs, ["task", "size", "teacher_saved_at_accuracy"]).items():
+        settings[task, size, f"teacher at {accuracy:.0%}"] = seed_runs
+    return labels, settings
+
+
+def distillation_table(distilled_runs, baseline_runs):
+    """Distilled students against the same sizes trained from scratch. The teacher is trained once and can teach
+    many students, so distillation pays off once it has taught at least the break-even number of students:
+    teacher training FLOPs / (FLOPs per success from scratch - FLOPs per success distilled, with forward passes),
+    rounded up. It is unknown when either side had no success, since its cost is then only a lower bound."""
+    print(f"\n{'task':7s} {'size':>5s} {'teacher':>16s} {'reached':>8s} {'student only':>13s} "
+          f"{'+ teacher forward':>18s} {'+ teacher training':>19s} {'break-even students':>20s}   (PFLOPs per success)")
+    labels, settings = distillation_settings(distilled_runs, baseline_runs)
+    tasks = sorted({r["task"] for r in distilled_runs})
+    sizes = [s for s in SIZE_ORDER if any(r["size"] == s for r in distilled_runs)]
+    for task, size in itertools.product(tasks, sizes):
+        scratch_runs = settings[task, size, "from scratch"]
+        scratch_cost = expected_flops_per_success(scratch_runs)
+        for label in labels:
+            seed_runs = settings.get((task, size, label))
+            if not seed_runs:
+                continue
+            n_reached = sum(r["reached"] for r in seed_runs)
+            costs = distillation_costs(seed_runs)
+            lower_bound = "" if n_reached else ">"  # no success: the compute spent is a lower bound
+            break_even = ""
+            if label != "from scratch":
+                saving_per_student = scratch_cost - costs[1]
+                if not n_reached or not any(r["reached"] for r in scratch_runs):
+                    break_even = "unknown"
+                elif saving_per_student <= 0:
+                    break_even = "never"
+                else:
+                    break_even = str(math.ceil(seed_runs[0]["teacher_training_flops"] / saving_per_student))
+            print(f"{task:7s} {size:>5s} {label:>16s} {n_reached:>4d}/{len(seed_runs):<3d} "
+                  + " ".join(f"{lower_bound}{cost / 1e15:.2f}".rjust(width) for cost, width in zip(costs, (13, 18, 19)))
+                  + f" {break_even:>20s}")
+
+
+def plot_distillation(distilled_runs, baseline_runs, fig_dir, threshold):
+    """One column per task, student size on the x-axis, one line per teacher checkpoint plus training from scratch.
+    Rows: probability of reaching the threshold (95% intervals); expected FLOPs per success counting the student
+    only; and counting both the teacher's forward passes and its training (the table also lists forward passes
+    alone). Hollow markers are lower bounds."""
+    tasks = sorted({r["task"] for r in distilled_runs})
+    fig, axes = plt.subplots(3, len(tasks), figsize=(5.5 * len(tasks), 10.5), squeeze=False, sharex=True)
+    labels, settings = distillation_settings(distilled_runs, baseline_runs)
+    for column, task in enumerate(tasks):
+        for i, label in enumerate(labels):
+            points = sorted((seed_runs[0]["params"], seed_runs) for (point_task, _, point_label), seed_runs
+                            in settings.items() if (point_task, point_label) == (task, label))
+            if not points:
+                continue
+            # neutral gray for training from scratch; the blue ramp for teachers, darker = more accurate teacher
+            color = "#6b6b6b" if label == "from scratch" else ramp(i, len(labels))
+            style = dict(color=color, marker=MARKERS[i % 4], ms=7, lw=2)
+            params = [p * 1.06 ** (i - (len(labels) - 1) / 2) for p, _ in points]  # sideways shift
+            n_reached = [sum(r["reached"] for r in seed_runs) for _, seed_runs in points]
+            probability = [n / len(seed_runs) for n, (_, seed_runs) in zip(n_reached, points)]
+            intervals = [wilson_interval(n, len(seed_runs)) for n, (_, seed_runs) in zip(n_reached, points)]
+            axes[0][column].errorbar(params, probability, yerr=[[p - lo for p, (lo, hi) in zip(probability, intervals)],
+                                     [hi - p for p, (lo, hi) in zip(probability, intervals)]],
+                                     capsize=3, elinewidth=1, ecolor=color + "99", label=label, **style)
+            for row, cost_index in ((1, 0), (2, 2)):
+                cost = [distillation_costs(seed_runs)[cost_index] for _, seed_runs in points]
+                axes[row][column].plot(params, cost, **style)
+                lower_bounds = [(x, y) for x, y, n in zip(params, cost, n_reached) if n == 0]
+                if lower_bounds:
+                    axes[row][column].scatter(*zip(*lower_bounds), s=60, facecolors="white", edgecolors=color,
+                                              linewidths=2, zorder=3, marker=style["marker"])
+        axes[0][column].set(xscale="log", title=task, ylim=(-0.03, 1.03))
+        axes[1][column].set(xscale="log", yscale="log")
+        axes[2][column].set(xscale="log", yscale="log", xlabel="student non-embedding parameters")
+    axes[0][0].set_ylabel(f"probability of reaching {threshold:.0%}")
+    axes[1][0].set_ylabel("FLOPs per success,\nstudent only")
+    axes[2][0].set_ylabel("FLOPs per success, with teacher\nforward passes and training")
+    axes[0][-1].legend(loc="upper left", bbox_to_anchor=(1.02, 1))
+    fig.tight_layout()
+    fig.savefig(fig_dir / "distillation.png", dpi=150)
+    plt.close(fig)
+
+
 def plot_curves(runs, fig_dir):
     """Held-out accuracy over training for every (task, T), one color per size, one line per seed."""
     for (task, T), rs in group(runs, ["task", "T"]).items():
@@ -331,10 +440,12 @@ if __name__ == "__main__":
     p.add_argument("root")
     p.add_argument("--best_lr", default=None)
     p.add_argument("--threshold", type=float, default=None, help="recompute at a lower accuracy threshold")
+    p.add_argument("--baseline", default=None, help="runs trained from scratch to compare distilled students against")
     a = p.parse_args()
     runs = load(a.root, a.threshold)
     print(f"{len(runs)} finished runs")
-    table(runs)
+    if not any(r.get("teacher") for r in runs):  # distilled runs get their own table below
+        table(runs)
     if a.best_lr:
         best_lr(runs, a.best_lr)
     fig_dir = Path(a.root) / ("figures" if a.threshold is None else f"figures_thr{a.threshold:g}")
@@ -343,9 +454,18 @@ if __name__ == "__main__":
     write_run_table(runs, fig_dir / "runs.csv")
     # architecture-sweep runs are labelled by their shape instead of a named size, and get their own figure
     architecture_runs = [r for r in runs if r["size"] not in SIZE_ORDER]
-    named_size_runs = [r for r in runs if r["size"] in SIZE_ORDER]
+    distilled_runs = [r for r in runs if r.get("teacher")]
+    named_size_runs = [r for r in runs if r["size"] in SIZE_ORDER and not r.get("teacher")]
     if architecture_runs:
         plot_architecture(architecture_runs, fig_dir, threshold)
+    if distilled_runs:
+        if a.baseline is None:
+            p.error("a folder with distilled runs needs --baseline, the runs trained from scratch to compare against")
+        # the same context lengths and student sizes, trained from scratch
+        baseline_runs = [r for r in load(a.baseline, a.threshold) if (r["T"], r["size"]) in
+                         {(d["T"], d["size"]) for d in distilled_runs}]
+        distillation_table(distilled_runs, baseline_runs)
+        plot_distillation(distilled_runs, baseline_runs, fig_dir, threshold)
     if named_size_runs:
         plot_cost(named_size_runs, "steps_to_threshold", fig_dir)
         plot_cost(named_size_runs, "flops_to_threshold", fig_dir)

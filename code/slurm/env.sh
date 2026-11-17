@@ -8,3 +8,6 @@ in_env() {
     singularity exec --nv /scratch/$USER/containers/miniconda3_latest.sif /bin/bash -c \
         'source ~/.bashrc && conda activate metagrad && cd "$0" && "$@"' "$CODE_DIR" "$@"
 }
+# wandb stages artifacts and caches files under $HOME by default, which has a 30k file limit; keep them on scratch
+export WANDB_DATA_DIR=/scratch/$USER/mlproj/wandb/data
+export WANDB_CACHE_DIR=/scratch/$USER/mlproj/wandb/cache
