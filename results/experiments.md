@@ -57,6 +57,27 @@ The step caps differ across context lengths, so for a comparison at equal budget
 - Failures at every context length mostly never leave the copying level. Runs that fail and never pass 50% held-out accuracy: 47 of 54 failures at T = 256, 47 of 48 at T = 512, 67 of 69 at T = 1024, and 89 of 90 at T = 2048. The median best accuracy of failed runs is 2 to 8% on MQAR and about 22% on needle.
 - Successes are often late. Of the successful runs, 21 of 36 at T = 256 and 23 of 42 at T = 512 succeed after half their step cap. So the success probabilities depend on the cap, and a longer cap would raise them.
 
+## Lost in the middle and the timing of retrieval (E4, analysis of the main sweep logs, no new runs)
+
+Every evaluation logs held-out accuracy in 5 bins of the retrieved pair's position in the context (start of the context to just before the queries), and the attention that the best head puts on the correct value token, from the query position. `python analyze.py results/main` prints both tables below into `analysis_table.txt` and draws `figures/retrieval_onset.png`.
+
+No lost-in-the-middle. Final accuracy is flat across positions at every context length, in successful and failed runs alike. Averaged over the runs of a task, context length, and outcome, no two bins differ by more than 0.02.
+
+| Task | T | Successful runs: accuracy by position | Failed runs: accuracy by position |
+|---|---|---|---|
+| MQAR | 256 | 0.95 0.96 0.96 0.96 0.95 | 0.25 0.26 0.26 0.26 0.24 |
+| MQAR | 1024 | 0.98 0.98 0.98 0.97 0.98 | 0.06 0.06 0.06 0.06 0.06 |
+| needle | 256 | 0.95 0.96 0.96 0.96 0.95 | 0.22 0.20 0.21 0.20 0.20 |
+| needle | 1024 | 0.93 0.94 0.94 0.95 0.93 | 0.25 0.23 0.24 0.23 0.23 |
+| needle | 2048 | none | 0.23 0.21 0.22 0.21 0.22 |
+
+The accuracy jump coincides with the retrieval head forming, in runs that have such a head. For each successful run, we compare the evaluation where accuracy first passes 50% with the one where the best head's attention on the correct value first reaches half its final level.
+- MQAR: 42 of 46 successful runs end with a head that puts at least 10% of its attention on the correct value. In 32 of these 42, attention reaches half its final level within 4 evaluations (1,000 steps) of the accuracy jump; the median lag is 2 evaluations, with attention slightly after accuracy.
+- needle: 34 of 53 successful runs have such a head. In 29 of the 34, attention reaches half its final level within 4 evaluations of the jump; the median lag is 1 evaluation.
+- The aligned curves (`retrieval_onset.png`) show the two tasks differ before the jump. On needle, accuracy sits flat at the copying level (21%) until about 500 steps before the jump, then rises to about 90% within 1,000 steps, with attention rising at the same evaluation. On MQAR, accuracy and attention both creep up over the 2,000 steps before the jump.
+- Runs that never pass 50% never form the head: their best head's largest attention on the correct value has a median of 0.004 on MQAR (largest 0.12) and 0.06 on needle (largest 0.39).
+- 19 of 53 successful needle runs (10 of them the 0.4M model at T = 512 and 1024) reach 90% with less than 10% attention on the correct value in every head. They solve the task through some other route that this probe does not see, for example by attending to a token next to the value. We did not test which. On MQAR this happens in only 4 of 46 runs.
+
 ## Architecture sweep (grid `architecture`, folder `results/architecture`)
 
 Config:

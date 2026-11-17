@@ -41,3 +41,22 @@ needle    512              s   3e-04   3.21M    6/9        35000      25.820    
 needle    512             xl   1e-04  59.49M    0/9          nan         nan      0.216           >5614.351
 needle    512             xs   1e-03   0.40M    8/9        24125       2.563      0.865               3.250
 
+task        T           runs   final accuracy by position of the pair, start to end
+mqar      256   27    failed   0.25 0.26 0.26 0.26 0.24
+mqar      256   18 successful   0.95 0.96 0.96 0.96 0.95
+mqar      512   23    failed   0.04 0.05 0.05 0.04 0.04
+mqar      512   22 successful   0.98 0.98 0.98 0.98 0.98
+mqar     1024   39    failed   0.06 0.06 0.06 0.06 0.06
+mqar     1024    6 successful   0.98 0.98 0.98 0.97 0.98
+mqar     2048   45    failed   0.02 0.02 0.02 0.02 0.02
+needle    256   27    failed   0.22 0.20 0.21 0.20 0.20
+needle    256   18 successful   0.95 0.96 0.96 0.96 0.95
+needle    512   25    failed   0.24 0.24 0.24 0.24 0.24
+needle    512   20 successful   0.94 0.95 0.95 0.94 0.93
+needle   1024   30    failed   0.25 0.23 0.24 0.23 0.23
+needle   1024   15 successful   0.93 0.94 0.94 0.95 0.93
+needle   2048   45    failed   0.23 0.21 0.22 0.21 0.22
+
+task    successful  attention ends below 10%  median lag (evaluations)  lag within 4 evaluations  max attention in runs that never pass 50%
+mqar            46                         4                       2.0                  32 of 42                median 0.004, largest 0.122
+needle          53                        19                       1.0                  29 of 34                median 0.059, largest 0.385

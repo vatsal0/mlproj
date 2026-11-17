@@ -11,6 +11,8 @@ Vatsal runs experiments on NYU's Torch cluster. Ammar and Abhishek own analysis 
 - `proposal_draft.md`: the proposal we submitted, followed by the TA feedback and checkpoint instructions.
 - `experiment_plan.md`: every experiment we plan to run, the question each one answers, and its compute cost. Read this first.
 - `checkpoint/`: everything for the Oct 28 checkpoint: the write-up (`checkpoint.md`), its figures, and the results table.
+- `checkpoint2/`: the Nov 11 checkpoint update (`update.md`), with its figures and tables, including the reproducibility check (the same seed rerun on another GPU).
+- `results/`: every finished experiment, one folder each. **Start with `results/SUMMARY.md` (core findings) and `results/experiments.md` (config, tables, and caveats for every experiment).** These are the source for the final report.
 - `code/`: tasks, model, training, sweeps, analysis, and SLURM scripts (details below).
 - `figures/`: figures used in write-ups.
 - `style_sample.tex`: a writing sample for any write-up drafted with AI (see below).
@@ -22,16 +24,16 @@ Vatsal runs experiments on NYU's Torch cluster. Ammar and Abhishek own analysis 
 |---|---|
 | `code/tasks.py` | Generates MQAR and needle-in-a-haystack batches on the fly |
 | `code/model.py` | Llama-style transformer, model sizes, and the FLOP count |
-| `code/train.py` | Trains one run; logs accuracy, accuracy by needle position, and attention on the correct token every 250 steps |
-| `code/sweep.py` | Named grids of runs (`lr`, `mvp`, `main`, `heads`, `head_dim`, `depth`) |
-| `code/analyze.py` | Summary table and figures from a folder of runs |
-| `code/slurm/` | Torch job scripts (only Vatsal needs these) |
+| `code/train.py` | Trains one run; logs accuracy, accuracy by needle position, and attention on the correct token every 250 steps. Resumes from its last evaluation. `--save_at_acc` saves checkpoints at accuracy milestones; `--teacher` distills from such a checkpoint |
+| `code/sweep.py` | Named grids of runs (`lr`, `lr_full`, `mvp`, `main`, `architecture`, `distillation`, and others) |
+| `code/analyze.py` | Summary table and figures from a folder of runs; `--baseline` compares distilled students against training from scratch |
+| `code/slurm/` | Torch job scripts (only Vatsal needs these); `submit_sweep_chain.sh` runs a grid as a chain of 8-hour jobs |
 
 Each run writes a folder with `summary.json` (final numbers, including steps and FLOPs to threshold) and `log.jsonl` (one line per evaluation).
 
 ## Getting results and making figures
 
-Run outputs live on Torch scratch. Vatsal copies them into `results/` without the model checkpoints and pushes:
+All experiments are finished and their results are in `results/`, so you do not need Torch access. Run outputs (including the model checkpoints, which are not in the repo) live on Torch scratch; Vatsal copied them with:
 
 ```
 rsync -av --exclude '*.pt' --exclude 'stdout_*' torch:/scratch/vb2647/mlproj/runs/ results/
@@ -41,14 +43,31 @@ Analysis only needs numpy and matplotlib:
 
 ```
 pip install numpy matplotlib
-python code/analyze.py results/mvp                  # table + figures in results/mvp/figures
-python code/analyze.py results/mvp --threshold 0.5  # same, at a 50% accuracy threshold
+python code/analyze.py results/main                  # table + figures in results/main/figures
+python code/analyze.py results/main --threshold 0.5  # same, at a 50% accuracy threshold
+python code/analyze.py results/architecture
+python code/analyze.py results/distillation --baseline results/main
 ```
 
+| Folder | Experiment | Runs |
+|---|---|---|
+| `results/lr`, `results/lr_full` | learning rate per size, at T = 256 and 512 | 30, 38 |
+| `results/calibration` | are the tasks solvable at T = 2048 within 20k steps? | 4 |
+| `results/mvp` | first scale sweep, for the Oct 28 checkpoint | 96 |
+| `results/main` | main sweep: 5 sizes × 2 tasks × T = 256 to 2048 × 9 seeds | 360 |
+| `results/architecture` | heads, head dimension, and depth around the 10.6M model, at T = 256 | 120 |
+| `results/distillation` | 0.4M to 10.6M students distilled from 59.5M teachers, at T = 256 | 54 |
+
+`main`, `architecture`, and `distillation` each hold `analysis_table.txt` (what `analyze.py` prints) and `figures/`, which includes `runs.csv` with one row per run. For the other folders, run `analyze.py` to get the table. Training curves for every run are on wandb: https://wandb.ai/vatsalbaherwani/long-context-scaling-mlproj (one group per experiment; ask Vatsal for access).
+
 The figures:
-- `flops_to_threshold.png` and `steps_to_threshold.png`: cost to reach the threshold against model size, one line per context length. Points are medians over seeds, bars span the min and max, and a label like `2/3` means only 2 of 3 seeds reached the threshold. This is our main result.
-- `curves_<task>_T<length>.png`: accuracy and attention on the correct token over training, for every run. Look for whether the accuracy jump coincides with the attention jump.
+- `success_and_cost.png`: our main result. Top, the probability of reaching 90% against model size, with 95% intervals. Bottom, the expected FLOPs per success: all compute spent, failed runs included, divided by the number of successes. Hollow markers are lower bounds, where no run succeeded.
+- `reached_vs_flops.png`: the fraction of runs that have reached 90% against FLOPs spent, one line per size.
+- `flops_to_threshold.png` and `steps_to_threshold.png`: cost to reach the threshold among successful seeds only. Points are medians over seeds, bars span the min and max, and a label like `2/3` means only 2 of 3 seeds reached the threshold. These favor sizes that succeed by luck, so prefer `success_and_cost.png`.
+- `curves_<task>_T<length>.png`: accuracy and attention on the correct token over training, for every run.
+- `retrieval_onset.png`: accuracy and attention aligned at the accuracy jump (does the jump coincide with the retrieval head forming?).
 - `acc_by_depth.png`: final needle accuracy by where the needle sits in the context (the lost-in-the-middle check).
+- `architecture.png` (in `results/architecture`) and `distillation.png` (in `results/distillation`).
 
 Runs that never reach 90% are not failures of the pipeline. A plateau at the copying level (21.3% on needle; 7.6%, 4.4%, 2.6% on MQAR at T = 256, 512, 1024; see the Baselines section of `checkpoint/checkpoint.md`) with flat attention means the model has learned to copy values but not to retrieve the right one. These cases are worth reporting.
 

@@ -18,3 +18,5 @@
   - Partly trained teachers (30% and 60%) cut the student's own compute per success on MQAR (3.2M: 26 to about 5 PFLOPs, 2/9 to 3/3) and on needle at 10.6M. On MQAR, the 90% teacher helps least.
   - Once the teacher's forward passes are counted, distillation costs more than training from scratch everywhere except needle at 10.6M, where it pays off even with the teacher's training included (about 115 vs 196 PFLOPs per success).
   - 3 seeds per setting, so these are rough.
+- **Lost in the middle:** none. Final accuracy is flat across the position of the retrieved pair at every context length.
+- **Accuracy jump and retrieval:** in successful runs with a retrieval head, the head forms within 1,000 steps of the accuracy jump (32 of 42 on MQAR, 29 of 34 on needle). 19 of 53 successful needle runs, mostly the 0.4M model at long context, reach 90% with no head attending to the value.

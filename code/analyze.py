@@ -412,6 +412,93 @@ def plot_curves(runs, fig_dir):
         plt.close(fig)
 
 
+def depth_table(runs):
+    """Lost in the middle? Final accuracy by relative position of the retrieved pair in the context (5 bins, from
+    the start of the context to just before the queries), for both tasks, averaged over all sizes, separately for
+    successful and failed runs."""
+    print(f"\n{'task':7s} {'T':>5s} {'runs':>14s}   final accuracy by position of the pair, start to end")
+    for (task, T, reached), rs in sorted(group(runs, ["task", "T", "reached"]).items()):
+        mean_accuracy_by_depth = np.mean([r["log"][-1]["acc_by_depth"] for r in rs], 0)
+        print(f"{task:7s} {T:5d} {len(rs):4d} {'successful' if reached else 'failed':>9s}   "
+              + " ".join(f"{accuracy:.2f}" for accuracy in mean_accuracy_by_depth))
+
+
+# a run "retrieves" if its best head ends with at least this much attention on the correct value
+RETRIEVAL_ATTENTION = 0.1
+
+
+def accuracy_jump_index(run):
+    """Index of the first evaluation where held-out accuracy passes 50%, or None if it never does."""
+    return next((i for i, record in enumerate(run["log"]) if record["acc"] >= 0.5), None)
+
+
+def retrieving_runs(runs):
+    """Successful runs whose best head ends with at least RETRIEVAL_ATTENTION on the correct value, and whose
+    accuracy passes 50% after the first evaluation (so the time of the jump is known). In the other successful runs
+    no single head attends to the value, so they retrieve some other way this probe does not see."""
+    return [r for r in runs if r["reached"] and r["log"][-1]["attn_mass_max"] >= RETRIEVAL_ATTENTION
+            and (accuracy_jump_index(r) or 0) > 0]
+
+
+def retrieval_timing_table(runs):
+    """Does the accuracy jump coincide with learning to retrieve? For each run in retrieving_runs, pooled over all
+    sizes and context lengths, the lag in evaluations from the accuracy jump to the evaluation where the best
+    head's attention on the correct value first reaches half its final level (positive = attention later)."""
+    print(f"\n{'task':7s} {'successful':>10s} {'attention ends below 10%':>25s} {'median lag (evaluations)':>25s} "
+          f"{'lag within 4 evaluations':>25s} {'max attention in runs that never pass 50%':>42s}")
+    for task in sorted({r["task"] for r in runs}):
+        successful = [r for r in runs if r["task"] == task and r["reached"]]
+        retrieving = retrieving_runs(successful)
+        n_low_attention = sum(r["log"][-1]["attn_mass_max"] < RETRIEVAL_ATTENTION for r in successful)
+        lags = []
+        for r in retrieving:
+            final_attention = r["log"][-1]["attn_mass_max"]
+            attention_half_index = next(i for i, record in enumerate(r["log"])
+                                        if record["attn_mass_max"] >= final_attention / 2)
+            lags.append(attention_half_index - accuracy_jump_index(r))
+        runs_never_passing_half = [r for r in runs if r["task"] == task and accuracy_jump_index(r) is None]
+        largest_attention = [max(record["attn_mass_max"] for record in r["log"]) for r in runs_never_passing_half]
+        never_passing_half = (f"median {np.median(largest_attention):.3f}, largest {max(largest_attention):.3f}"
+                              if largest_attention else "none")
+        lag_summary = (f"{np.median(lags):25.1f} {f'{sum(abs(lag) <= 4 for lag in lags)} of {len(lags)}':>25s}"
+                       if lags else f"{'none':>25s} {'none':>25s}")
+        print(f"{task:7s} {len(successful):10d} {n_low_attention:25d} {lag_summary} {never_passing_half:>42s}")
+
+
+def plot_retrieval_onset(runs, fig_dir, window=20):
+    """Held-out accuracy and the best head's attention on the correct value, for the runs in retrieving_runs
+    (pooled over sizes and context lengths), aligned at the evaluation where accuracy first passes 50%. Lines are
+    medians over runs, bands the middle half. Runs stop soon after reaching the threshold, so the lines end where
+    fewer than half the runs are left."""
+    tasks = sorted({r["task"] for r in runs})
+    fig, axes = plt.subplots(1, len(tasks), figsize=(5.5 * len(tasks), 4), squeeze=False, sharey=True)
+    for ax, task in zip(axes[0], tasks):
+        retrieving = retrieving_runs([r for r in runs if r["task"] == task])
+        if not retrieving:
+            continue
+        accuracy_jump_indices = [accuracy_jump_index(r) for r in retrieving]
+        # offsets from the jump at which at least half the runs still have an evaluation
+        offsets = [offset for offset in range(-window, window + 1)
+                   if sum(0 <= jump + offset < len(r["log"]) for r, jump in zip(retrieving, accuracy_jump_indices))
+                   >= len(retrieving) / 2]
+        for metric, label, color, line_style in (("acc", "held-out accuracy", RAMP[-1], "-"),
+                                                 ("attn_mass_max", "best head's attention on the correct value",
+                                                  RAMP[2], "--")):
+            values_by_offset = [[r["log"][jump + offset][metric] for r, jump in zip(retrieving, accuracy_jump_indices)
+                                 if 0 <= jump + offset < len(r["log"])] for offset in offsets]
+            steps = [offset * retrieving[0]["eval_every"] for offset in offsets]
+            ax.plot(steps, [np.median(values) for values in values_by_offset], color=color, ls=line_style, lw=2,
+                    label=label)
+            ax.fill_between(steps, [np.percentile(values, 25) for values in values_by_offset],
+                            [np.percentile(values, 75) for values in values_by_offset], color=color, alpha=0.15, lw=0)
+        ax.axvline(0, color="gray", lw=1)
+        ax.set(title=f"{task}, {len(retrieving)} runs", xlabel="steps from accuracy first passing 50%", ylim=(0, 1))
+    axes[0][0].legend(loc="center left", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(fig_dir / "retrieval_onset.png", dpi=150)
+    plt.close(fig)
+
+
 def plot_depth(runs, fig_dir):
     """Final accuracy by relative position of the retrieved pair (lost-in-the-middle check)."""
     rs = [r for r in runs if r["task"] == "needle"]
@@ -473,3 +560,6 @@ if __name__ == "__main__":
         plot_reached_vs_flops(named_size_runs, fig_dir, threshold)
         plot_curves(named_size_runs, fig_dir)
         plot_depth(named_size_runs, fig_dir)
+        depth_table(named_size_runs)
+        retrieval_timing_table(named_size_runs)
+        plot_retrieval_onset(named_size_runs, fig_dir)
