@@ -60,3 +60,11 @@ needle   2048   45    failed   0.23 0.21 0.22 0.21 0.22
 task    successful  attention ends below 10%  median lag (evaluations)  lag within 4 evaluations  max attention in runs that never pass 50%
 mqar            46                         4                       2.0                  32 of 42                median 0.004, largest 0.122
 needle          53                        19                       1.0                  29 of 34                median 0.059, largest 0.385
+
+cost per success of the cheapest size, fitted as T^exponent over T = [256, 512, 1024]
+  mqar    own step caps              exponent 2.92 (95% interval 2.03 to 4.19), PFLOPs per success 13.1, 155, 747, 2 of 2000 resamples unfittable
+  mqar    equal 20,000-step budget   cannot fit: some context length has no success
+  needle  own step caps              exponent 1.44 (95% interval 0.29 to 2.25), PFLOPs per success 1.58, 3.25, 11.6, 0 of 2000 resamples unfittable
+  needle  equal 20,000-step budget   exponent 2.41 (95% interval 1.01 to 3.45), PFLOPs per success 1.58, 8.92, 44.7, 1 of 2000 resamples unfittable
+  mqar    FLOPs per training step grow as T^1.07 to T^1.23 across sizes
+  needle  FLOPs per training step grow as T^1.07 to T^1.24 across sizes

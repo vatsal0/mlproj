@@ -65,6 +65,7 @@ The figures:
 - `reached_vs_flops.png`: the fraction of runs that have reached 90% against FLOPs spent, one line per size.
 - `flops_to_threshold.png` and `steps_to_threshold.png`: cost to reach the threshold among successful seeds only. Points are medians over seeds, bars span the min and max, and a label like `2/3` means only 2 of 3 seeds reached the threshold. These favor sizes that succeed by luck, so prefer `success_and_cost.png`.
 - `curves_<task>_T<length>.png`: accuracy and attention on the correct token over training, for every run.
+- `context_length_fit.png`: the cheapest size's cost per success against context length, with a fitted power law and 95% intervals (main sweep).
 - `retrieval_onset.png`: accuracy and attention aligned at the accuracy jump (does the jump coincide with the retrieval head forming?).
 - `acc_by_depth.png`: final needle accuracy by where the needle sits in the context (the lost-in-the-middle check).
 - `architecture.png` (in `results/architecture`) and `distillation.png` (in `results/distillation`).

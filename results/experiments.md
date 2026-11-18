@@ -57,6 +57,30 @@ The step caps differ across context lengths, so for a comparison at equal budget
 - Failures at every context length mostly never leave the copying level. Runs that fail and never pass 50% held-out accuracy: 47 of 54 failures at T = 256, 47 of 48 at T = 512, 67 of 69 at T = 1024, and 89 of 90 at T = 2048. The median best accuracy of failed runs is 2 to 8% on MQAR and about 22% on needle.
 - Successes are often late. Of the successful runs, 21 of 36 at T = 256 and 23 of 42 at T = 512 succeed after half their step cap. So the success probabilities depend on the cap, and a longer cap would raise them.
 
+## Context-length fit (analysis of the main sweep, no new runs)
+
+Method (`analyze.py`, `context_length_fits`; figure `results/main/figures/context_length_fit.png`):
+- At each context length, take the cheapest size's expected FLOPs per success (all compute spent, failures included, divided by the number of successes).
+- Fit cost = a · T^exponent on log-log axes over T = 256, 512, 1024. T = 2048 is left out because no run succeeds there; the figure shows it as a hollow lower bound.
+- The 95% intervals come from 2,000 resamples of the seeds, with replacement, within each size. A resample where some context length has no success at any size cannot be fitted and is left out (at most 2 of 2,000).
+- Fitted twice: under each context length's own step cap (20k at T = 256, 50k at 512 and 1024), and as if every run had stopped at 20k steps, the equal budget. A success under the equal budget must be confirmed by its 3 evaluations within 20k steps.
+
+| Task | Step budget | PFLOPs per success at T = 256, 512, 1024 | Exponent (95% interval) |
+|---|---|---|---|
+| MQAR | own step caps | 13, 155, 747 | 2.9 (2.0 to 4.2) |
+| MQAR | equal 20k steps | no success at T = 1024 | cannot fit |
+| needle | own step caps | 1.6, 3.3, 11.6 | 1.4 (0.3 to 2.2) |
+| needle | equal 20k steps | 1.6, 8.9, 45 | 2.4 (1.0 to 3.5) |
+
+For comparison, the FLOPs of one training step grow as T^1.07 to T^1.24 across sizes, on both tasks.
+
+- MQAR: the cost per success grows much faster than the cost of a step. Its exponent interval (2.0 to 4.2) lies above the per-step exponents. The extra growth comes from runs needing more steps and failing more often.
+- needle: under each context length's own step cap, the growth is consistent with the cost of a step alone (interval 0.3 to 2.2 includes about 1.1). Under the equal 20k-step budget it is faster (2.4, 1.0 to 3.5), because at T = 512 and 1024 many successes come after 20k steps.
+- Caveats:
+  - Only three context lengths, so the exponent is a summary of the trend, not a law to extrapolate. The T = 2048 lower bounds (about 130 to 140 PFLOPs, from the smallest model's 20k steps) fall far below the MQAR trend and say little.
+  - The cheapest size changes with T on MQAR (10.6M at T = 256, then 3.2M at 512 and 1024 with only 2 and 1 of 9 successes), so those points rest on few successes. The wide intervals reflect this.
+  - The minimum over sizes is biased low under resampling: some size is often lucky. This is why the MQAR T = 256 point sits near the top of its interval.
+
 ## Lost in the middle and the timing of retrieval (E4, analysis of the main sweep logs, no new runs)
 
 Every evaluation logs held-out accuracy in 5 bins of the retrieved pair's position in the context (start of the context to just before the queries), and the attention that the best head puts on the correct value token, from the query position. `python analyze.py results/main` prints both tables below into `analysis_table.txt` and draws `figures/retrieval_onset.png`.

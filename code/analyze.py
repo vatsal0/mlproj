@@ -499,6 +499,137 @@ def plot_retrieval_onset(runs, fig_dir, window=20):
     plt.close(fig)
 
 
+# context lengths where some size succeeds; longer ones are shown only as lower bounds
+CONTEXT_LENGTHS_TO_FIT = [256, 512, 1024]
+EQUAL_STEP_BUDGET = 20_000
+
+
+def capped_at_steps(runs, max_steps):
+    """Copies of the runs as if each had stopped at max_steps. The learning rate is constant after warmup,
+    so a run's first max_steps do not depend on its own step cap. A success must be confirmed by its
+    patience evaluations within max_steps."""
+    capped = []
+    for r in runs:
+        confirmed_at_step = r["steps_to_threshold"] + (r["patience"] - 1) * r["eval_every"] if r["reached"] else None
+        reached = r["reached"] and confirmed_at_step <= max_steps
+        flops_spent = r["flops_to_threshold"] if reached else min(r["last_step"], max_steps) * r["flops_per_step"]
+        capped.append({**r, "reached": reached, "flops_spent": flops_spent})
+    return capped
+
+
+def cheapest_cost_per_success(seed_runs_by_setting):
+    """Lowest expected FLOPs per success over the settings that succeed at least once; infinite if none does."""
+    costs = [expected_flops_per_success(seed_runs) for seed_runs in seed_runs_by_setting.values()
+             if any(r["reached"] for r in seed_runs)]
+    return min(costs, default=math.inf)
+
+
+def fit_context_length_exponent(runs, task, n_resamples=2000):
+    """Fits cost = a * T^exponent to the cheapest setting's expected FLOPs per success at each context length.
+    A setting is a size and learning rate. The 95% intervals come from resampling seeds, with replacement,
+    within each setting. A resample where some context length has no success has infinite cost there and
+    cannot be fitted; it is left out of the exponent interval, so more than 2.5% of those leaves its
+    upper end unbounded."""
+    seed_runs_by_setting_at_context_length = {
+        T: dict(group([r for r in runs if r["task"] == task and r["T"] == T], ["size", "lr"]))
+        for T in CONTEXT_LENGTHS_TO_FIT}
+    cheapest_costs = [cheapest_cost_per_success(seed_runs_by_setting_at_context_length[T])
+                      for T in CONTEXT_LENGTHS_TO_FIT]
+    if math.inf in cheapest_costs:
+        return None
+    log_context_lengths = np.log(CONTEXT_LENGTHS_TO_FIT)
+    random_generator = np.random.default_rng(0)
+    resampled_costs = []
+    for _ in range(n_resamples):
+        resampled_costs.append([])
+        for T in CONTEXT_LENGTHS_TO_FIT:
+            resampled_settings = {setting: list(random_generator.choice(seed_runs, len(seed_runs)))
+                                  for setting, seed_runs in seed_runs_by_setting_at_context_length[T].items()}
+            resampled_costs[-1].append(cheapest_cost_per_success(resampled_settings))
+    resampled_costs = np.array(resampled_costs)
+    fittable = np.isfinite(resampled_costs).all(1)
+    resampled_exponents = [np.polyfit(log_context_lengths, np.log(costs), 1)[0] for costs in resampled_costs[fittable]]
+    slope, intercept = np.polyfit(log_context_lengths, np.log(cheapest_costs), 1)
+    return dict(cheapest_costs=cheapest_costs, exponent=slope, intercept=intercept,
+                exponent_interval=np.percentile(resampled_exponents, [2.5, 97.5]),
+                cost_intervals=np.percentile(resampled_costs, [2.5, 97.5], axis=0).T,  # may be infinite
+                upper_end_unbounded=(~fittable).mean() > 0.025, n_unfittable=int((~fittable).sum()),
+                n_resamples=n_resamples)
+
+
+def context_length_fits(runs):
+    """The fit for each task, under each context length's own step cap and under an equal step budget."""
+    fits = {}
+    for task in sorted({r["task"] for r in runs}):
+        task_runs = [r for r in runs if r["task"] == task]
+        fits[task, "own step caps"] = fit_context_length_exponent(task_runs, task)
+        fits[task, f"equal {EQUAL_STEP_BUDGET:,}-step budget"] = fit_context_length_exponent(
+            capped_at_steps(task_runs, EQUAL_STEP_BUDGET), task)
+    return fits
+
+
+def context_length_fit_table(runs, fits):
+    """How fast the cheapest cost per success grows with context length, against how fast the cost of one
+    training step grows."""
+    print(f"\ncost per success of the cheapest size, fitted as T^exponent over T = {CONTEXT_LENGTHS_TO_FIT}")
+    for (task, budget_label), fit in fits.items():
+        if fit is None:
+            print(f"  {task:7s} {budget_label:26s} cannot fit: some context length has no success")
+            continue
+        low, high = fit["exponent_interval"]
+        high_text = "unbounded" if fit["upper_end_unbounded"] else f"{high:.2f}"
+        costs = ", ".join(f"{cost / 1e15:.3g}" for cost in fit["cheapest_costs"])
+        print(f"  {task:7s} {budget_label:26s} exponent {fit['exponent']:.2f} (95% interval {low:.2f} to {high_text}), "
+              f"PFLOPs per success {costs}, {fit['n_unfittable']} of {fit['n_resamples']} resamples unfittable")
+    for task in sorted({r["task"] for r in runs}):
+        flops_per_step_exponents = []
+        for size_runs in group([r for r in runs if r["task"] == task and r["T"] in CONTEXT_LENGTHS_TO_FIT], ["size"]).values():
+            if len({r["T"] for r in size_runs}) >= 2:
+                log_context_lengths = np.log([r["T"] for r in size_runs])
+                log_flops_per_step = np.log([r["flops_per_step"] for r in size_runs])
+                flops_per_step_exponents.append(np.polyfit(log_context_lengths, log_flops_per_step, 1)[0])
+        if flops_per_step_exponents:
+            print(f"  {task:7s} FLOPs per training step grow as T^{min(flops_per_step_exponents):.2f} "
+                  f"to T^{max(flops_per_step_exponents):.2f} across sizes")
+
+
+def plot_context_length_fit(runs, fits, fig_dir):
+    """Cheapest expected FLOPs per success against context length, one line per task, with the fitted power law
+    (each context length's own step cap). Bars are 95% intervals from resampling seeds. Hollow markers at
+    longer context lengths, where no run of the task succeeded, are lower bounds."""
+    task_fits = {task: fits.get((task, "own step caps")) for task in TASK_STYLES}
+    task_fits = {task: fit for task, fit in task_fits.items() if fit is not None}
+    if not task_fits:
+        return
+    fig, ax = plt.subplots(figsize=(6, 4.5))
+    for i, (task, fit) in enumerate(task_fits.items()):
+        style = TASK_STYLES[task]
+        sideways_shift = 1.04 ** (i - (len(task_fits) - 1) / 2)  # keeps the two tasks' markers apart
+        context_lengths = np.array(CONTEXT_LENGTHS_TO_FIT) * sideways_shift
+        ax.vlines(context_lengths, *fit["cost_intervals"].T, color=style["color"], lw=1.5)
+        ax.scatter(context_lengths, fit["cheapest_costs"], s=60, zorder=3, **style)
+        low, high = fit["exponent_interval"]
+        high_text = "unbounded" if fit["upper_end_unbounded"] else f"{high:.1f}"
+        ax.plot(CONTEXT_LENGTHS_TO_FIT, np.exp(fit["intercept"]) * np.array(CONTEXT_LENGTHS_TO_FIT) ** fit["exponent"],
+                color=style["color"], lw=2, label=f"{task}: T^{fit['exponent']:.1f} (95% interval {low:.1f} to {high_text})")
+        # a context length where some run succeeds would need a real cost, not a lower bound, so it is skipped
+        for (T,), longest_runs in group([r for r in runs if r["task"] == task and r["T"] > CONTEXT_LENGTHS_TO_FIT[-1]],
+                                        ["T"]).items():
+            if not any(r["reached"] for r in longest_runs):
+                lower_bound = min(expected_flops_per_success(seed_runs)
+                                  for seed_runs in group(longest_runs, ["size", "lr"]).values())
+                ax.scatter([T * sideways_shift], [lower_bound], s=70, facecolors="white", edgecolors=style["color"],
+                           linewidths=2, marker=style["marker"], zorder=3)
+    ax.set(xscale="log", yscale="log", xlabel="context length T", ylabel="expected FLOPs per success, cheapest size")
+    context_length_ticks = sorted({r["T"] for r in runs})
+    ax.set_xticks(context_length_ticks, [str(T) for T in context_length_ticks])
+    ax.minorticks_off()
+    ax.legend(loc="upper left")
+    fig.tight_layout()
+    fig.savefig(fig_dir / "context_length_fit.png", dpi=150)
+    plt.close(fig)
+
+
 def plot_depth(runs, fig_dir):
     """Final accuracy by relative position of the retrieved pair (lost-in-the-middle check)."""
     rs = [r for r in runs if r["task"] == "needle"]
@@ -563,3 +694,6 @@ if __name__ == "__main__":
         depth_table(named_size_runs)
         retrieval_timing_table(named_size_runs)
         plot_retrieval_onset(named_size_runs, fig_dir)
+        fits = context_length_fits(named_size_runs)
+        context_length_fit_table(named_size_runs, fits)
+        plot_context_length_fit(named_size_runs, fits, fig_dir)

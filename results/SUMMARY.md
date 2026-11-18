@@ -6,6 +6,7 @@
   - needle: the smallest model (0.4M) is the cheapest and most reliable (7 of 9 at T = 1024, 11.6 PFLOPs per success). The 59.5M model drops to 0 of 9 at T = 512.
   - MQAR: only large models succeed at longer context. At T = 512, 25M and 59.5M succeed in 9 of 9 within 50k steps; at T = 1024, only 59.5M succeeds in more than 1 of 9 (4 of 9).
 - **Cost per success** from T = 256 to 1024 rises 7× on needle and 57× on MQAR, for the cheapest successful size.
+- **Context-length fit** (cheapest size, T = 256 to 1024, 95% intervals from resampling seeds): MQAR cost per success grows as T^2.9 (2.0 to 4.2), much faster than the cost of a step (T^1.1 to 1.2). needle grows as T^1.4 (0.3 to 2.2) under each length's own step cap, and T^2.4 (1.0 to 3.5) under an equal 20k-step budget. Only three context lengths, so these are rough.
 - **Model size at T = 256:** success does not rise with model size. The 10.6M model reaches 90% in 9 of 9 seeds on MQAR but only 1 of 9 on needle.
 - **Cost per success at T = 256:** the cheapest model is the smallest one that succeeds reliably:
   - needle: 0.4M, at 1.6 PFLOPs per success;
